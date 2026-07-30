@@ -26,6 +26,15 @@ is_uint()
 	esac
 }
 
+partition_uuid()
+{
+	partition_provider=${1}p${2}
+	gpart list "$1" | awk -v provider="${partition_provider}" '
+	    $2 == "Name:" { current = $3 }
+	    current == provider && $1 == "rawuuid:" { print $2; exit }
+	'
+}
+
 read_config()
 {
 	[ -r "${PAYLOAD}/config" ] || die "missing ${PAYLOAD}/config"
@@ -247,6 +256,16 @@ partition_target()
 	fi
 	gpart add -b "${root_start}" -t "freebsd-${filesystem}" \
 	    -l freebsd_root "${target_disk}"
+	esp_uuid=$(partition_uuid "${target_disk}" 2)
+	root_uuid=$(partition_uuid "${target_disk}" "${root_partition}")
+	[ -n "${esp_uuid}" ] || die "cannot determine ESP partition GUID"
+	[ -n "${root_uuid}" ] || die "cannot determine root partition GUID"
+	swap_uuid=
+	if [ "${SWAP_MIB}" -gt 0 ]; then
+		swap_uuid=$(partition_uuid "${target_disk}" 3)
+		[ -n "${swap_uuid}" ] ||
+		    die "cannot determine swap partition GUID"
+	fi
 	if [ "${storage}" = 1 ] || [ "${storage}" = 2 ]; then
 		offset=$((64 * 512))
 		cmp -s -i "${offset}:${offset}" -n "$((reserve - offset))" \
@@ -281,8 +300,8 @@ mount_target()
 		mount "/dev/${target_disk}p${root_partition}" \
 		    "${BSDINSTALL_CHROOT}"
 		root_mounted=1
-		printf '/dev/ufs/%s\t/\tufs\trw,noatime\t1\t1\n' \
-		    "${ROOT_LABEL}" >> "${PATH_FSTAB}"
+		printf '/dev/gptid/%s\t/\tufs\trw,noatime\t1\t1\n' \
+		    "${root_uuid}" >> "${PATH_FSTAB}"
 	else
 		zpool create -f -R "${BSDINSTALL_CHROOT}" \
 		    -O atime=off -O compression=lz4 -O mountpoint=none \
@@ -299,11 +318,11 @@ mount_target()
 	mount -t msdosfs "/dev/${target_disk}p2" \
 	    "${BSDINSTALL_CHROOT}/boot/efi"
 	esp_mounted=1
-	printf '/dev/msdosfs/EFI\t/boot/efi\tmsdosfs\trw,noatime\t0\t0\n' \
-	    >> "${PATH_FSTAB}"
+	printf '/dev/gptid/%s\t/boot/efi\tmsdosfs\trw,noatime\t0\t0\n' \
+	    "${esp_uuid}" >> "${PATH_FSTAB}"
 	if [ "${SWAP_MIB}" -gt 0 ]; then
-		printf '/dev/gpt/freebsd_swap\tnone\tswap\tsw\t0\t0\n' \
-		    >> "${PATH_FSTAB}"
+		printf '/dev/gptid/%s\tnone\tswap\tsw\t0\t0\n' \
+		    "${swap_uuid}" >> "${PATH_FSTAB}"
 	fi
 }
 
@@ -328,7 +347,11 @@ hw.rk3588.efi_fdt_highmem="1"
 if_rge_load="YES"
 if_rge_name="/boot/modules/if_rge.ko"
 EOF
-	if [ "${filesystem}" = zfs ]; then
+	if [ "${filesystem}" = ufs ]; then
+		cat >> "${BSDINSTALL_CHROOT}/boot/loader.conf" <<EOF
+vfs.root.mountfrom="ufs:/dev/gptid/${root_uuid}"
+EOF
+	else
 		mkdir -p "${BSDINSTALL_CHROOT}/boot/zfs"
 		zpool set cachefile="${BSDINSTALL_CHROOT}/boot/zfs/zpool.cache" \
 		    "${ZFS_POOL_NAME}"
