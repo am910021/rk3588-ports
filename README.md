@@ -44,5 +44,7 @@ automatically.
 
 ## License
 
-Each port follows the license declared in its `Makefile`. Bundled upstream
-files retain their original copyright and license notices.
+Repository-authored content is licensed under the BSD 2-Clause License; see
+`LICENSE`. Each port also follows the license declared in its `Makefile`.
+Third-party and upstream files retain their original copyright and license
+notices and are not relicensed by this repository.
