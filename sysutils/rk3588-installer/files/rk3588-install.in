@@ -353,8 +353,11 @@ vfs.root.mountfrom="ufs:/dev/gptid/${root_uuid}"
 EOF
 	else
 		mkdir -p "${BSDINSTALL_CHROOT}/boot/zfs"
+		mkdir -p "${BSDINSTALL_CHROOT}/boot/efi/efi/freebsd"
 		zpool set cachefile="${BSDINSTALL_CHROOT}/boot/zfs/zpool.cache" \
 		    "${ZFS_POOL_NAME}"
+		printf 'rootdev=zfs:%s/ROOT/default:\n' "${ZFS_POOL_NAME}" \
+		    > "${BSDINSTALL_CHROOT}/boot/efi/efi/freebsd/loader.env"
 		cat >> "${BSDINSTALL_CHROOT}/boot/loader.conf" <<EOF
 zfs_load="YES"
 vfs.root.mountfrom="zfs:${ZFS_POOL_NAME}/ROOT/default"
