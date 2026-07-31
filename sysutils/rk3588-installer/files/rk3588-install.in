@@ -378,8 +378,82 @@ mount_target()
 	fi
 }
 
+merge_config()
+{
+	baseline=$1
+	target=$2
+	name=$3
+	overlay=${install_work}/${name}.installed
+	merged=${install_work}/${name}.merged
+
+	[ -f "${baseline}" ] || return
+	[ -f "${target}" ] || : > "${target}"
+	cp -p "${target}" "${overlay}"
+	awk '
+	function key(line, pos, result) {
+		pos = index(line, "=")
+		if (pos == 0)
+			return ""
+		result = substr(line, 1, pos - 1)
+		gsub(/^[[:space:]]+|[[:space:]]+$/, "", result)
+		if (result !~ /^[A-Za-z0-9_.]+$/)
+			return ""
+		return result
+	}
+	FNR == NR {
+		result = key($0)
+		if (result != "")
+			override[result] = 1
+		next
+	}
+	{
+		result = key($0)
+		if (result == "" || !override[result])
+			print
+	}
+	' "${overlay}" "${baseline}" > "${merged}"
+	cat "${overlay}" >> "${merged}"
+	cp -p "${merged}" "${target}"
+}
+
+set_config()
+{
+	target=$1
+	name=$2
+	value=$3
+	updated=${install_work}/${name}.updated
+
+	awk -v name="${name}" -v replacement="${name}=\"${value}\"" '
+	function key(line, pos, result) {
+		pos = index(line, "=")
+		if (pos == 0)
+			return ""
+		result = substr(line, 1, pos - 1)
+		gsub(/^[[:space:]]+|[[:space:]]+$/, "", result)
+		return result
+	}
+	key($0) == name {
+		if (!found)
+			print replacement
+		found = 1
+		next
+	}
+	{ print }
+	END {
+		if (!found)
+			print replacement
+	}
+	' "${target}" > "${updated}"
+	cp -p "${updated}" "${target}"
+}
+
 configure_target()
 {
+	merge_config /etc/rc.conf \
+	    "${BSDINSTALL_CHROOT}/etc/rc.conf" rc.conf
+	merge_config /boot/loader.conf \
+	    "${BSDINSTALL_CHROOT}/boot/loader.conf" loader.conf
+
 	mkdir -p "${BSDINSTALL_CHROOT}/boot/efi/dtb"
 	cp -p "${PAYLOAD}/freebsd.dtb" \
 	    "${BSDINSTALL_CHROOT}/boot/efi/dtb/freebsd.dtb"
@@ -387,22 +461,22 @@ configure_target()
 	    "${BSDINSTALL_CHROOT}/boot/efi/bootmenu.env"
 	[ -f "${PAYLOAD}/if_rge.pkg" ] ||
 	    die "missing ${PAYLOAD}/if_rge.pkg"
-	ASSUME_ALWAYS_YES=yes pkg -r "${BSDINSTALL_CHROOT}" \
-	    add "${PAYLOAD}/if_rge.pkg"
+	tar --exclude '+*' -xpf "${PAYLOAD}/if_rge.pkg" \
+	    -C "${BSDINSTALL_CHROOT}"
+	[ -f "${BSDINSTALL_CHROOT}/boot/modules/if_rge.ko" ] ||
+	    die "if_rge.pkg did not install if_rge.ko"
 
-	cat >> "${BSDINSTALL_CHROOT}/boot/loader.conf" <<'EOF'
-boot_multicons="YES"
-boot_serial="YES"
-console="comconsole,efi"
-comconsole_speed="1500000"
-hw.rk3588.efi_fdt_highmem="1"
-if_rge_load="YES"
-if_rge_name="/boot/modules/if_rge.ko"
-EOF
+	loader_conf=${BSDINSTALL_CHROOT}/boot/loader.conf
+	set_config "${loader_conf}" boot_multicons YES
+	set_config "${loader_conf}" boot_serial YES
+	set_config "${loader_conf}" console comconsole,efi
+	set_config "${loader_conf}" comconsole_speed 1500000
+	set_config "${loader_conf}" hw.rk3588.efi_fdt_highmem 1
+	set_config "${loader_conf}" if_rge_load YES
+	set_config "${loader_conf}" if_rge_name /boot/modules/if_rge.ko
 	if [ "${filesystem}" = ufs ]; then
-		cat >> "${BSDINSTALL_CHROOT}/boot/loader.conf" <<EOF
-vfs.root.mountfrom="ufs:/dev/gptid/${root_uuid}"
-EOF
+		set_config "${loader_conf}" vfs.root.mountfrom \
+		    "ufs:/dev/gptid/${root_uuid}"
 	else
 		mkdir -p "${BSDINSTALL_CHROOT}/boot/zfs"
 		mkdir -p "${BSDINSTALL_CHROOT}/boot/efi/efi/freebsd"
@@ -410,10 +484,9 @@ EOF
 		    "${ZFS_POOL_NAME}"
 		printf 'rootdev=zfs:%s/ROOT/default:\n' "${ZFS_POOL_NAME}" \
 		    > "${BSDINSTALL_CHROOT}/boot/efi/efi/freebsd/loader.env"
-		cat >> "${BSDINSTALL_CHROOT}/boot/loader.conf" <<EOF
-zfs_load="YES"
-vfs.root.mountfrom="zfs:${ZFS_POOL_NAME}/ROOT/default"
-EOF
+		set_config "${loader_conf}" zfs_load YES
+		set_config "${loader_conf}" vfs.root.mountfrom \
+		    "zfs:${ZFS_POOL_NAME}/ROOT/default"
 		sysrc -q -R "${BSDINSTALL_CHROOT}" zfs_enable=YES
 	fi
 	if [ -f "${PAYLOAD}/loader.conf.board" ]; then
@@ -508,6 +581,29 @@ assert_eq()
 
 selftest()
 {
+	install_work=$(mktemp -d -t rk3588-install-selftest)
+	cat > "${install_work}/base.conf" <<'EOF'
+baseline="kept"
+shared="base"
+root="old"
+EOF
+	cat > "${install_work}/overlay.conf" <<'EOF'
+shared="installed"
+target="kept"
+EOF
+	merge_config "${install_work}/base.conf" \
+	    "${install_work}/overlay.conf" merge-test
+	set_config "${install_work}/overlay.conf" root new
+	assert_eq "$(grep -c '^shared=' "${install_work}/overlay.conf")" 1
+	grep -q '^baseline="kept"$' "${install_work}/overlay.conf" ||
+	    die "selftest: baseline setting was not preserved"
+	grep -q '^shared="installed"$' "${install_work}/overlay.conf" ||
+	    die "selftest: installed setting did not override baseline"
+	grep -q '^root="new"$' "${install_work}/overlay.conf" ||
+	    die "selftest: set_config did not replace root"
+	find "${install_work}" -depth -delete
+	install_work=
+
 	FIRMWARE_MIB=16
 	ESP_MIB=256
 	SWAP_MIB=0
