@@ -449,9 +449,13 @@ set_config()
 
 configure_target()
 {
-	merge_config /etc/rc.conf \
+	[ -f "${PAYLOAD}/rc.conf.base" ] ||
+	    die "missing ${PAYLOAD}/rc.conf.base"
+	[ -f "${PAYLOAD}/loader.conf.base" ] ||
+	    die "missing ${PAYLOAD}/loader.conf.base"
+	merge_config "${PAYLOAD}/rc.conf.base" \
 	    "${BSDINSTALL_CHROOT}/etc/rc.conf" rc.conf
-	merge_config /boot/loader.conf \
+	merge_config "${PAYLOAD}/loader.conf.base" \
 	    "${BSDINSTALL_CHROOT}/boot/loader.conf" loader.conf
 
 	mkdir -p "${BSDINSTALL_CHROOT}/boot/efi/dtb"
