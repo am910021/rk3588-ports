@@ -1,5 +1,7 @@
 Installs FreeBSD on RK3588 systems that boot through U-Boot.
 
-The installer reserves a GPT partition for Rockchip firmware, creates the
-EFI and UFS or ZFS partitions, runs the standard FreeBSD configuration
-tools, and installs the board DTB and U-Boot menu.
+The installer requires the RK3588 U-Boot boot-storage property, selects a
+target MMC disk while excluding the live root disk, optionally writes U-Boot
+to the target, reserves a GPT partition for Rockchip firmware, and creates EFI
+and UFS or ZFS partitions.  It then runs the standard FreeBSD configuration
+tools and installs the board DTB and U-Boot menu.

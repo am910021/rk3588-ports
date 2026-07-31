@@ -108,6 +108,33 @@ boot_storage()
 	echo $((0x${hex}))
 }
 
+supported_target()
+{
+	case "$1" in
+	mmcsd0|mmcsd1) return 0 ;;
+	*) return 1 ;;
+	esac
+}
+
+target_description()
+{
+	diskinfo -v "/dev/$1" | awk '
+	    /# mediasize in bytes/ { size = $6 }
+	    /# Disk descr/ {
+		sub(/^[[:space:]]*/, "")
+		sub(/[[:space:]]+#.*/, "")
+		description = $0
+	    }
+	    END {
+		if (size == "")
+			size = "unknown size"
+		if (description == "")
+			description = "MMC storage"
+		printf "%s - %s", size, description
+	    }
+	'
+}
+
 choose_target()
 {
 	source_provider=$(mounted_provider /)
@@ -118,25 +145,23 @@ choose_target()
 	if [ -n "${1:-}" ]; then
 		target_disk=$1
 	else
-		target_disk=
+		set --
 		for disk in $(sysctl -n kern.disks); do
-			case "${disk}" in
-			mmcsd0|mmcsd1)
-				[ "${disk}" = "${source_disk}" ] ||
-				    target_disk="${target_disk} ${disk}"
-				;;
-			esac
+			supported_target "${disk}" || continue
+			[ "${disk}" = "${source_disk}" ] && continue
+			set -- "$@" "${disk}" "$(target_description "${disk}")"
 		done
-		set -- ${target_disk}
-		[ "$#" -eq 1 ] ||
-		    die "specify one target disk: ${0##*/} install mmcsdN"
-		target_disk=$1
+		[ "$#" -gt 0 ] || die "no supported target disk is available"
+		exec 3>&1
+		target_disk=$(dialog --backtitle "RK3588 FreeBSD Installer" \
+		    --title "Installation target" --menu \
+		    "Live root /dev/${source_disk} is excluded.\n\
+Choose the disk to erase and install:" 0 0 0 "$@" 2>&1 1>&3)
+		exec 3>&-
 	fi
 
-	case "${target_disk}" in
-	mmcsd0|mmcsd1) ;;
-	*) die "target must be mmcsd0 or mmcsd1" ;;
-	esac
+	supported_target "${target_disk}" ||
+	    die "unsupported target disk: ${target_disk}"
 	[ "${target_disk}" != "${source_disk}" ] ||
 	    die "refusing to overwrite live root disk ${source_disk}"
 	[ -c "/dev/${target_disk}" ] ||
@@ -147,6 +172,27 @@ choose_target()
 		[ "${disk}" != "${target_disk}" ] ||
 		    die "${target_disk} still has mounted filesystems"
 	done
+}
+
+choose_uboot()
+{
+	if [ -n "${RK3588_INSTALL_UBOOT:-}" ]; then
+		install_uboot=${RK3588_INSTALL_UBOOT}
+	else
+		exec 3>&1
+		install_uboot=$(dialog --backtitle "RK3588 FreeBSD Installer" \
+		    --title "Install U-Boot" --menu \
+		    "Write the bundled U-Boot firmware to /dev/${target_disk}?\n\n\
+Choose NO when boot firmware is provided by SPI or another disk." \
+		    0 0 0 \
+		    NO "Do not write or replace U-Boot" \
+		    YES "Write U-Boot to this MMC disk" 2>&1 1>&3)
+		exec 3>&-
+	fi
+	case "${install_uboot}" in
+	YES|NO) ;;
+	*) die "RK3588_INSTALL_UBOOT must be YES or NO" ;;
+	esac
 }
 
 choose_filesystem()
@@ -191,7 +237,8 @@ confirm_install()
 	    "ALL DATA on /dev/${target_disk} will be destroyed.\n\n\
 Live root: /dev/${source_disk}\n\
 Target: /dev/${target_disk}\n\
-Boot storage: ${storage}\n\
+Current boot storage: ${storage_name}\n\
+Install U-Boot on target: ${install_uboot}\n\
 Filesystem: ${filesystem}\n\
 Swap: ${SWAP_MIB} MiB\n\
 Firmware area: ${FIRMWARE_MIB} MiB\n\n\
@@ -214,26 +261,24 @@ check_capacity()
 
 install_firmware()
 {
-	case "${storage}" in
-	1|2)
-		firmware=${PAYLOAD}/firmware-update.bin
-		firmware_sectors=$((FIRMWARE_UPDATE_BYTES / 512))
-		[ -f "${firmware}" ] || die "missing ${firmware}"
-		[ "$(stat -f %z "${firmware}")" -eq "${FIRMWARE_UPDATE_BYTES}" ] ||
-		    die "${firmware} has an unexpected size"
+	[ "${install_uboot}" = YES ] || {
+		echo "Skipping U-Boot write to /dev/${target_disk}"
+		return
+	}
 
-		echo "Writing RK3588 firmware prefix to /dev/${target_disk}"
-		dd if="${firmware}" of="/dev/${target_disk}" bs=512 \
-		    count="${firmware_sectors}" conv=notrunc,fsync status=none
-		cmp -s -n "${FIRMWARE_UPDATE_BYTES}" \
-		    "${firmware}" "/dev/${target_disk}" ||
-		    die "firmware readback verification failed"
-		echo "Firmware readback verification passed"
-		;;
-	9)
-		echo "SPI boot detected; target firmware area will not be written"
-		;;
-	esac
+	firmware=${PAYLOAD}/firmware-update.bin
+	firmware_sectors=$((FIRMWARE_UPDATE_BYTES / 512))
+	[ -f "${firmware}" ] || die "missing ${firmware}"
+	[ "$(stat -f %z "${firmware}")" -eq "${FIRMWARE_UPDATE_BYTES}" ] ||
+	    die "${firmware} has an unexpected size"
+
+	echo "Writing RK3588 firmware prefix to /dev/${target_disk}"
+	dd if="${firmware}" of="/dev/${target_disk}" bs=512 \
+	    count="${firmware_sectors}" conv=notrunc,fsync status=none
+	cmp -s -n "${FIRMWARE_UPDATE_BYTES}" \
+	    "${firmware}" "/dev/${target_disk}" ||
+	    die "firmware readback verification failed"
+	echo "Firmware readback verification passed"
 }
 
 partition_target()
@@ -272,7 +317,7 @@ partition_target()
 		[ -n "${swap_uuid}" ] ||
 		    die "cannot determine swap partition GUID"
 	fi
-	if [ "${storage}" = 1 ] || [ "${storage}" = 2 ]; then
+	if [ "${install_uboot}" = YES ]; then
 		offset=$((64 * 512))
 		cmp -s -i "${offset}:${offset}" \
 		    -n "$((FIRMWARE_UPDATE_BYTES - offset))" \
@@ -422,18 +467,21 @@ cleanup()
 install_system()
 {
 	read_config
+	storage=$(boot_storage) ||
+	    die "this system was not started by a supported RK3588 U-Boot"
+	case "${storage}" in
+	1) storage_name="eMMC (1)" ;;
+	2) storage_name="SD (2)" ;;
+	9) storage_name="SPI NOR (9)" ;;
+	*) die "unsupported RK3588 U-Boot storage value: ${storage}" ;;
+	esac
+	echo "Detected current boot storage: ${storage_name}"
 	choose_target "${1:-}"
+	choose_uboot
 	choose_filesystem
 	choose_swap
 	calculate_layout
 	check_capacity
-	storage=$(boot_storage) ||
-	    die "cannot read /chosen/rockchip,boot-storage"
-	case "${storage}" in
-	1|2|9) ;;
-	*) die "unsupported boot storage: ${storage}" ;;
-	esac
-	echo "Detected boot storage ${storage}"
 	confirm_install
 
 	esp_mounted=0
@@ -476,6 +524,19 @@ selftest()
 	assert_eq "${esp_start}" 65536
 	assert_eq "${root_start}" 1638400
 	assert_eq "${root_partition}" 4
+
+	supported_target mmcsd0 || die "selftest: mmcsd0 must be supported"
+	if supported_target nda0; then
+		die "selftest: nda0 must not be enabled yet"
+	fi
+	target_disk=mmcsd0
+	RK3588_INSTALL_UBOOT=YES
+	choose_uboot
+	assert_eq "${install_uboot}" YES
+	RK3588_INSTALL_UBOOT=NO
+	choose_uboot
+	assert_eq "${install_uboot}" NO
+	unset RK3588_INSTALL_UBOOT
 	echo "rk3588-install selftest passed"
 }
 
@@ -491,6 +552,6 @@ selftest)
 	selftest
 	;;
 *)
-	die "usage: ${0##*/} [launch | install [mmcsdN] | selftest]"
+	die "usage: ${0##*/} [launch | install [disk] | selftest]"
 	;;
 esac
