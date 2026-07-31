@@ -371,6 +371,12 @@ vfs.root.mountfrom="zfs:${ZFS_POOL_NAME}/ROOT/default"
 EOF
 		sysrc -q -R "${BSDINSTALL_CHROOT}" zfs_enable=YES
 	fi
+	if [ -f "${PAYLOAD}/loader.conf.board" ]; then
+		cat "${PAYLOAD}/loader.conf.board" >> \
+		    "${BSDINSTALL_CHROOT}/boot/loader.conf"
+	fi
+	sysrc -q -R "${BSDINSTALL_CHROOT}" \
+	    ntpd_enable=YES ntpd_sync_on_start=YES
 }
 
 configure_freebsd()
