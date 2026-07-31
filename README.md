@@ -23,7 +23,8 @@ swap.
 The installer detects SPI boot through `/chosen/rockchip,boot-storage`. When
 booting from SPI, it preserves the target firmware area instead of writing a
 second U-Boot image. It also installs the board DTB, EFI loader, and U-Boot
-menu needed to boot the installed system.
+menu needed to boot the installed system and enables `powerd` for RK3588
+DVFS.
 
 The NanoPC-T6 LTS image builder consumes these ports from
 `src/ports` and supplies board-specific firmware and DTB payloads to the
