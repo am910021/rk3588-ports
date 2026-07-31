@@ -44,6 +44,11 @@ read_config()
 	16|32) ;;
 	*) die "FIRMWARE_MIB must be 16 or 32" ;;
 	esac
+	is_uint "${FIRMWARE_UPDATE_BYTES:-}" &&
+	    [ "${FIRMWARE_UPDATE_BYTES}" -gt 0 ] &&
+	    [ $((FIRMWARE_UPDATE_BYTES % 512)) -eq 0 ] &&
+	    [ "${FIRMWARE_UPDATE_BYTES}" -le $((FIRMWARE_MIB * 1024 * 1024)) ] ||
+	    die "FIRMWARE_UPDATE_BYTES must be a sector-aligned firmware prefix"
 	is_uint "${ESP_MIB:-}" && [ "${ESP_MIB}" -gt 0 ] ||
 	    die "ESP_MIB must be a positive integer"
 	case "${ROOT_LABEL:-}" in
@@ -211,16 +216,17 @@ install_firmware()
 {
 	case "${storage}" in
 	1|2)
-		firmware=${PAYLOAD}/firmware.bin
-		reserve=$((FIRMWARE_MIB * 1024 * 1024))
+		firmware=${PAYLOAD}/firmware-update.bin
+		firmware_sectors=$((FIRMWARE_UPDATE_BYTES / 512))
 		[ -f "${firmware}" ] || die "missing ${firmware}"
-		[ "$(stat -f %z "${firmware}")" -eq "${reserve}" ] ||
-		    die "${firmware} must be exactly ${FIRMWARE_MIB} MiB"
+		[ "$(stat -f %z "${firmware}")" -eq "${FIRMWARE_UPDATE_BYTES}" ] ||
+		    die "${firmware} has an unexpected size"
 
-		echo "Writing ${FIRMWARE_MIB} MiB RK3588 firmware to /dev/${target_disk}"
-		dd if="${firmware}" of="/dev/${target_disk}" bs=1m \
-		    count="${FIRMWARE_MIB}" conv=notrunc,fsync status=none
-		cmp -s -n "${reserve}" "${firmware}" "/dev/${target_disk}" ||
+		echo "Writing RK3588 firmware prefix to /dev/${target_disk}"
+		dd if="${firmware}" of="/dev/${target_disk}" bs=512 \
+		    count="${firmware_sectors}" conv=notrunc,fsync status=none
+		cmp -s -n "${FIRMWARE_UPDATE_BYTES}" \
+		    "${firmware}" "/dev/${target_disk}" ||
 		    die "firmware readback verification failed"
 		echo "Firmware readback verification passed"
 		;;
@@ -268,7 +274,8 @@ partition_target()
 	fi
 	if [ "${storage}" = 1 ] || [ "${storage}" = 2 ]; then
 		offset=$((64 * 512))
-		cmp -s -i "${offset}:${offset}" -n "$((reserve - offset))" \
+		cmp -s -i "${offset}:${offset}" \
+		    -n "$((FIRMWARE_UPDATE_BYTES - offset))" \
 		    "${firmware}" "/dev/${target_disk}" ||
 		    die "firmware verification after GPT creation failed"
 		echo "Firmware verification after GPT creation passed"
