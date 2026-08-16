@@ -347,6 +347,8 @@ mount_target()
 	newfs_msdos -F 16 -L EFI "/dev/${target_disk}p2" >/dev/null
 
 	if [ "${filesystem}" = ufs ]; then
+		zpool labelclear -f "/dev/${target_disk}p${root_partition}" \
+		    >/dev/null 2>&1 || true
 		newfs -U -L "${ROOT_LABEL}" \
 		    "/dev/${target_disk}p${root_partition}" >/dev/null
 		mount "/dev/${target_disk}p${root_partition}" \
