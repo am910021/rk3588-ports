@@ -26,7 +26,10 @@ The installer only runs when `/chosen/rockchip,boot-storage` reports eMMC
 by the supported RK3588 U-Boot; it does not control the U-Boot write choice.
 
 It also installs the board DTB, EFI loader, and U-Boot menu needed to boot the
-installed system and enables `powerd` for RK3588 DVFS.
+installed system and enables `powerd` for RK3588 DVFS. After the standard
+FreeBSD service selection, the installer offers optional HYM8563 RTC and
+RK3588 hardware watchdog checkboxes. `hym8563`, `dwwdt`, and `watchdogd`
+remain disabled on the installed target unless selected.
 
 The NanoPC-T6 LTS image builder consumes these ports from
 `src/ports` and supplies board-specific firmware and DTB payloads to the

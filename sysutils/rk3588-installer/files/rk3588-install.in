@@ -229,6 +229,41 @@ choose_swap()
 	is_uint "${SWAP_MIB}" || die "swap size must be a non-negative integer"
 }
 
+choose_rk3588_services()
+{
+	if [ -n "${RK3588_INSTALL_RTC:-}" ] ||
+	    [ -n "${RK3588_INSTALL_WATCHDOG:-}" ]; then
+		enable_rtc=${RK3588_INSTALL_RTC:-NO}
+		enable_watchdog=${RK3588_INSTALL_WATCHDOG:-NO}
+	else
+		exec 3>&1
+		rk3588_services=$(dialog --backtitle "RK3588 FreeBSD Installer" \
+		    --title "RK3588 Services" --no-cancel --separate-output \
+		    --checklist \
+		    "Choose optional RK3588 services to start at boot:" 0 0 0 \
+		    rtc "HYM8563 real-time clock" off \
+		    dwwdt "Hardware watchdog (dwwdt and watchdogd)" off \
+		    2>&1 1>&3)
+		exec 3>&-
+		case " ${rk3588_services} " in
+		*" rtc "*) enable_rtc=YES ;;
+		*) enable_rtc=NO ;;
+		esac
+		case " ${rk3588_services} " in
+		*" dwwdt "*) enable_watchdog=YES ;;
+		*) enable_watchdog=NO ;;
+		esac
+	fi
+	case "${enable_rtc}" in
+	YES|NO) ;;
+	*) die "RK3588_INSTALL_RTC must be YES or NO" ;;
+	esac
+	case "${enable_watchdog}" in
+	YES|NO) ;;
+	*) die "RK3588_INSTALL_WATCHDOG must be YES or NO" ;;
+	esac
+}
+
 confirm_install()
 {
 	[ "${RK3588_INSTALL_ASSUME_YES:-NO}" = YES ] && return
@@ -459,6 +494,10 @@ configure_target()
 	    "${BSDINSTALL_CHROOT}/etc/rc.conf" rc.conf
 	merge_config "${PAYLOAD}/loader.conf.base" \
 	    "${BSDINSTALL_CHROOT}/boot/loader.conf" loader.conf
+	if [ -f "${PAYLOAD}/loader.conf.board" ]; then
+		cat "${PAYLOAD}/loader.conf.board" >> \
+		    "${BSDINSTALL_CHROOT}/boot/loader.conf"
+	fi
 
 	mkdir -p "${BSDINSTALL_CHROOT}/boot/efi/dtb"
 	cp -p "${PAYLOAD}/freebsd.dtb" \
@@ -480,6 +519,18 @@ configure_target()
 	set_config "${loader_conf}" hw.rk3588.efi_fdt_highmem 1
 	set_config "${loader_conf}" if_rge_load YES
 	set_config "${loader_conf}" if_rge_name /boot/modules/if_rge.ko
+	if [ "${enable_rtc}" = YES ]; then
+		[ -f "${BSDINSTALL_CHROOT}/boot/kernel/hym8563.ko" ] ||
+		    die "installed kernel does not provide hym8563.ko"
+	fi
+	set_config "${loader_conf}" hym8563_load "${enable_rtc}"
+	if [ "${enable_watchdog}" = YES ]; then
+		[ -f "${BSDINSTALL_CHROOT}/boot/kernel/dwwdt.ko" ] ||
+		    die "installed kernel does not provide dwwdt.ko"
+	fi
+	set_config "${loader_conf}" dwwdt_load "${enable_watchdog}"
+	sysrc -q -R "${BSDINSTALL_CHROOT}" \
+	    watchdogd_enable="${enable_watchdog}"
 	if [ "${filesystem}" = ufs ]; then
 		set_config "${loader_conf}" vfs.root.mountfrom \
 		    "ufs:/dev/gptid/${root_uuid}"
@@ -495,10 +546,6 @@ configure_target()
 		    "zfs:${ZFS_POOL_NAME}/ROOT/default"
 		sysrc -q -R "${BSDINSTALL_CHROOT}" zfs_enable=YES
 	fi
-	if [ -f "${PAYLOAD}/loader.conf.board" ]; then
-		cat "${PAYLOAD}/loader.conf.board" >> \
-		    "${BSDINSTALL_CHROOT}/boot/loader.conf"
-	fi
 	sysrc -q -R "${BSDINSTALL_CHROOT}" \
 	    ntpd_enable=YES ntpd_sync_on_start=YES powerd_enable=YES
 }
@@ -512,6 +559,7 @@ configure_freebsd()
 	bsdinstall netconfig || true
 	bsdinstall time
 	bsdinstall services
+	choose_rk3588_services
 	bsdinstall hardening
 	bsdinstall firmware || true
 
@@ -639,6 +687,18 @@ EOF
 	choose_uboot
 	assert_eq "${install_uboot}" NO
 	unset RK3588_INSTALL_UBOOT
+	RK3588_INSTALL_RTC=YES
+	RK3588_INSTALL_WATCHDOG=YES
+	choose_rk3588_services
+	assert_eq "${enable_rtc}" YES
+	assert_eq "${enable_watchdog}" YES
+	RK3588_INSTALL_RTC=NO
+	RK3588_INSTALL_WATCHDOG=NO
+	choose_rk3588_services
+	assert_eq "${enable_rtc}" NO
+	assert_eq "${enable_watchdog}" NO
+	unset RK3588_INSTALL_RTC
+	unset RK3588_INSTALL_WATCHDOG
 	echo "rk3588-install selftest passed"
 }
 
