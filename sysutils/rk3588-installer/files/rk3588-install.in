@@ -510,6 +510,12 @@ configure_target()
 	    -C "${BSDINSTALL_CHROOT}"
 	[ -f "${BSDINSTALL_CHROOT}/boot/modules/if_rge.ko" ] ||
 	    die "if_rge.pkg did not install if_rge.ko"
+	[ -f "${PAYLOAD}/rtlbt-firmware.pkg" ] ||
+	    die "missing ${PAYLOAD}/rtlbt-firmware.pkg"
+	ASSUME_ALWAYS_YES=yes pkg -r "${BSDINSTALL_CHROOT}" add \
+	    "${PAYLOAD}/rtlbt-firmware.pkg"
+	[ -f "${BSDINSTALL_CHROOT}/usr/local/share/rtlbt-firmware/rtl8822cu_fw.bin" ] ||
+	    die "rtlbt-firmware package did not install RTL8822CU firmware"
 
 	loader_conf=${BSDINSTALL_CHROOT}/boot/loader.conf
 	set_config "${loader_conf}" boot_multicons YES
