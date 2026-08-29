@@ -80,21 +80,35 @@ mounted_provider()
 	mount -p | awk -v path="$1" '$2 == path { print $1; exit }'
 }
 
+provider_disk_name()
+{
+	name=$1
+	if supported_target "${name}"; then
+		echo "${name}"
+		return
+	fi
+	case "${name}" in
+	*p*)
+		disk=${name%p*}
+		partition=${name#"${disk}"p}
+		if supported_target "${disk}" && is_uint "${partition}"; then
+			echo "${disk}"
+			return
+		fi
+		;;
+	esac
+	return 1
+}
+
 provider_disk()
 {
 	provider=${1#/dev/}
-	case "${provider}" in
-	mmcsd0|mmcsd0p*) echo mmcsd0; return ;;
-	mmcsd1|mmcsd1p*) echo mmcsd1; return ;;
-	esac
+	provider_disk_name "${provider}" && return
 
 	provider=$(geom label status -s |
 	    awk -v name="${provider}" '$1 == name { print $3; exit }')
-	case "${provider}" in
-	mmcsd0|mmcsd0p*) echo mmcsd0 ;;
-	mmcsd1|mmcsd1p*) echo mmcsd1 ;;
-	*) return 1 ;;
-	esac
+	[ -n "${provider}" ] || return 1
+	provider_disk_name "${provider}"
 }
 
 boot_storage()
@@ -111,9 +125,14 @@ boot_storage()
 supported_target()
 {
 	case "$1" in
-	mmcsd0|mmcsd1) return 0 ;;
+	mmcsd*) unit=${1#mmcsd} ;;
+	ada*) unit=${1#ada} ;;
+	da*) unit=${1#da} ;;
+	nda*) unit=${1#nda} ;;
+	nvd*) unit=${1#nvd} ;;
 	*) return 1 ;;
 	esac
+	is_uint "${unit}"
 }
 
 target_description()
@@ -129,9 +148,22 @@ target_description()
 		if (size == "")
 			size = "unknown size"
 		if (description == "")
-			description = "MMC storage"
+			description = "storage device"
 		printf "%s - %s", size, description
 	    }
+	'
+}
+
+provider_list_uses_disk()
+{
+	awk -v disk="/dev/$1" '
+	    $1 == disk { found = 1 }
+	    index($1, disk "p") == 1 {
+		partition = substr($1, length(disk) + 2)
+		if (partition ~ /^[0-9]+$/)
+			found = 1
+	    }
+	    END { exit !found }
 	'
 }
 
@@ -143,7 +175,7 @@ choose_target()
 	    die "unsupported live root provider: ${source_provider}"
 
 	if [ -n "${1:-}" ]; then
-		target_disk=$1
+		target_disk=${1#/dev/}
 	else
 		set --
 		for disk in $(sysctl -n kern.disks); do
@@ -172,10 +204,25 @@ Choose the disk to erase and install:" 0 0 0 "$@" 2>&1 1>&3)
 		[ "${disk}" != "${target_disk}" ] ||
 		    die "${target_disk} still has mounted filesystems"
 	done
+	if command -v zpool >/dev/null 2>&1 &&
+	    zpool status -LP 2>/dev/null |
+	    provider_list_uses_disk "${target_disk}"; then
+		die "${target_disk} is used by an imported ZFS pool"
+	fi
 }
 
 choose_uboot()
 {
+	case "${target_disk}" in
+	mmcsd*) ;;
+	*)
+		case "${RK3588_INSTALL_UBOOT:-NO}" in
+		NO) install_uboot=NO; return ;;
+		YES) die "U-Boot can only be written to an MMC target" ;;
+		*) die "RK3588_INSTALL_UBOOT must be YES or NO" ;;
+		esac
+		;;
+	esac
 	if [ -n "${RK3588_INSTALL_UBOOT:-}" ]; then
 		install_uboot=${RK3588_INSTALL_UBOOT}
 	else
@@ -681,9 +728,25 @@ EOF
 	assert_eq "${root_start}" 1638400
 	assert_eq "${root_partition}" 4
 
-	supported_target mmcsd0 || die "selftest: mmcsd0 must be supported"
-	if supported_target nda0; then
-		die "selftest: nda0 must not be enabled yet"
+	for disk in mmcsd0 mmcsd12 ada0 da3 nda0 nvd2; do
+		supported_target "${disk}" ||
+		    die "selftest: ${disk} must be supported"
+	done
+	for disk in mmcsd0p1 ada0p2 da nda0p1 nvd-1 nvme0 cd0; do
+		if supported_target "${disk}"; then
+			die "selftest: ${disk} must not be supported"
+		fi
+	done
+	assert_eq "$(provider_disk_name nda0p3)" nda0
+	if provider_disk_name nda0s1 >/dev/null 2>&1; then
+		die "selftest: MBR slices must not be accepted"
+	fi
+	printf '/dev/nda0p3 ONLINE\n' |
+	    provider_list_uses_disk nda0 ||
+	    die "selftest: target ZFS provider was not detected"
+	if printf '/dev/nda1p3 ONLINE\n' |
+	    provider_list_uses_disk nda0; then
+		die "selftest: unrelated ZFS provider matched target"
 	fi
 	target_disk=mmcsd0
 	RK3588_INSTALL_UBOOT=YES
@@ -693,6 +756,12 @@ EOF
 	choose_uboot
 	assert_eq "${install_uboot}" NO
 	unset RK3588_INSTALL_UBOOT
+	target_disk=nda0
+	choose_uboot
+	assert_eq "${install_uboot}" NO
+	if (RK3588_INSTALL_UBOOT=YES; choose_uboot) >/dev/null 2>&1; then
+		die "selftest: U-Boot write must be rejected for NVMe"
+	fi
 	RK3588_INSTALL_RTC=YES
 	RK3588_INSTALL_WATCHDOG=YES
 	choose_rk3588_services
