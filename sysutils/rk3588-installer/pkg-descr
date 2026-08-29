@@ -5,4 +5,4 @@ target eMMC, SD, SATA, NVMe, or USB disk while excluding the live root disk,
 optionally writes U-Boot only to MMC targets, reserves a GPT partition for
 Rockchip firmware, and creates EFI and UFS or ZFS partitions.  It then runs the
 standard FreeBSD configuration tools and installs the board DTB and U-Boot
-menu.
+menu.  A bundled pkg package bootstraps local packages without network access.

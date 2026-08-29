@@ -1,5 +1,5 @@
 PORTNAME=	rk3588-installer
-DISTVERSION=	0.5.0
+DISTVERSION=	0.5.1
 CATEGORIES=	sysutils
 
 MAINTAINER=	am910021@gmail.com

@@ -587,6 +587,14 @@ configure_target()
 	    "${BSDINSTALL_CHROOT}/boot/efi/dtb/freebsd.dtb"
 	cp -p "${PAYLOAD}/bootmenu.env" \
 	    "${BSDINSTALL_CHROOT}/boot/efi/bootmenu.env"
+	[ -x /usr/local/sbin/pkg ] ||
+	    die "live image is missing the prebuilt pkg package"
+	[ -f "${PAYLOAD}/pkg.pkg" ] ||
+	    die "missing ${PAYLOAD}/pkg.pkg"
+	ASSUME_ALWAYS_YES=yes /usr/local/sbin/pkg -r "${BSDINSTALL_CHROOT}" \
+	    -o REPO_AUTOUPDATE=false add "${PAYLOAD}/pkg.pkg"
+	[ -x "${BSDINSTALL_CHROOT}/usr/local/sbin/pkg" ] ||
+	    die "pkg.pkg did not install pkg"
 	[ -f "${PAYLOAD}/if_rge.pkg" ] ||
 	    die "missing ${PAYLOAD}/if_rge.pkg"
 	tar --exclude '+*' -xpf "${PAYLOAD}/if_rge.pkg" \
@@ -595,7 +603,8 @@ configure_target()
 	    die "if_rge.pkg did not install if_rge.ko"
 	[ -f "${PAYLOAD}/rtlbt-firmware.pkg" ] ||
 	    die "missing ${PAYLOAD}/rtlbt-firmware.pkg"
-	ASSUME_ALWAYS_YES=yes pkg -r "${BSDINSTALL_CHROOT}" add \
+	ASSUME_ALWAYS_YES=yes /usr/local/sbin/pkg -r "${BSDINSTALL_CHROOT}" \
+	    -o REPO_AUTOUPDATE=false add \
 	    "${PAYLOAD}/rtlbt-firmware.pkg"
 	[ -f "${BSDINSTALL_CHROOT}/usr/local/share/rtlbt-firmware/rtl8822cu_fw.bin" ] ||
 	    die "rtlbt-firmware package did not install RTL8822CU firmware"
@@ -650,7 +659,6 @@ configure_freebsd()
 	bsdinstall services
 	choose_rk3588_services
 	bsdinstall hardening
-	bsdinstall firmware || true
 
 	if dialog --backtitle "RK3588 FreeBSD Installer" \
 	    --title "Add User Accounts" --yesno \
