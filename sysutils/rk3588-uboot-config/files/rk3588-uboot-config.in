@@ -19,7 +19,8 @@ die()
 help()
 {
 	printf '%s\n' \
-	    "usage: ${0##*/} [-e esp-mount] show|clear" \
+	    "usage: ${0##*/} [-e esp-mount] show [list|next|now]" \
+	    "       ${0##*/} [-e esp-mount] clear" \
 	    "       ${0##*/} [-e esp-mount] set name=value [...]" \
 	    "" \
 	    "Settings:" \
@@ -28,8 +29,9 @@ help()
 	    "  bootmenu_delay        0-99 seconds" \
 	    "  logo_delay            0-99 seconds" \
 	    "" \
-	    "Exact boot-target names are shown by the U-Boot boot menu." \
-	    "The show command displays only the pending one-shot request."
+	    "show list  List targets detected by the current U-Boot." \
+	    "show now   Show the target selected for this boot." \
+	    "show next  Show the pending one-shot request (default for bare show)."
 }
 
 usage()
@@ -113,6 +115,39 @@ write_request()
 	echo "Wrote ${request}; settings take effect once at next boot."
 }
 
+print_targets()
+{
+	targets=$1
+	selected=$2
+	echo "Available U-Boot targets:"
+	printf '%s\n' "${targets}" | tr ',' '\n' |
+	while IFS= read -r target; do
+		[ -n "${target}" ] || continue
+		if [ "${target}" = "${selected}" ]; then
+			printf '  %s (current)\n' "${target}"
+		else
+			printf '  %s\n' "${target}"
+		fi
+	done
+}
+
+show_list()
+{
+	targets=$(ofwdump -P freebsd,boot-targets -S /chosen 2>/dev/null || true)
+	[ -n "${targets}" ] ||
+	    die "current U-Boot did not publish targets; reboot with the updated firmware"
+	selected=$(ofwdump -P freebsd,boot-target -S /chosen 2>/dev/null || true)
+	print_targets "${targets}" "${selected}"
+}
+
+show_now()
+{
+	selected=$(ofwdump -P freebsd,boot-target -S /chosen 2>/dev/null || true)
+	[ -n "${selected}" ] ||
+	    die "current U-Boot did not publish its target; reboot with the updated firmware"
+	echo "Current U-Boot target: ${selected}"
+}
+
 self_test()
 {
 	valid_target auto
@@ -126,6 +161,7 @@ self_test()
 	valid_title '*** FreeBSD U-Boot Boot Menu ***'
 	! valid_title ''
 	help | grep -q freebsd_default_boot
+	print_targets 'mmc0:2,usb0:2' usb0:2 | grep -q 'usb0:2 (current)'
 	echo "${0##*/}: self-test passed"
 }
 
@@ -155,13 +191,20 @@ help|-h|--help)
 	help
 	;;
 show)
-	[ "$#" -eq 0 ] || usage
-	check_esp
-	if [ -f "${ESP}/${REQUEST_NAME}" ]; then
-		cat "${ESP}/${REQUEST_NAME}"
-	else
-		echo "No pending U-Boot request. Run '${0##*/} help' for settings."
-	fi
+	[ "$#" -le 1 ] || usage
+	case "${1:-next}" in
+	list) show_list ;;
+	now) show_now ;;
+	next)
+		check_esp
+		if [ -f "${ESP}/${REQUEST_NAME}" ]; then
+			cat "${ESP}/${REQUEST_NAME}"
+		else
+			echo "No pending U-Boot request."
+		fi
+		;;
+	*) usage ;;
+	esac
 	;;
 clear)
 	[ "$#" -eq 0 ] || usage
