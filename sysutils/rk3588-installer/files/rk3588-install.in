@@ -585,8 +585,6 @@ configure_target()
 	mkdir -p "${BSDINSTALL_CHROOT}/boot/efi/dtb"
 	cp -p "${PAYLOAD}/freebsd.dtb" \
 	    "${BSDINSTALL_CHROOT}/boot/efi/dtb/freebsd.dtb"
-	cp -p "${PAYLOAD}/bootmenu.env" \
-	    "${BSDINSTALL_CHROOT}/boot/efi/bootmenu.env"
 	[ -x /usr/local/sbin/pkg ] ||
 	    die "live image is missing the prebuilt pkg package"
 	[ -f "${PAYLOAD}/pkg.pkg" ] ||
@@ -608,6 +606,12 @@ configure_target()
 	    "${PAYLOAD}/rtlbt-firmware.pkg"
 	[ -f "${BSDINSTALL_CHROOT}/usr/local/share/rtlbt-firmware/rtl8822cu_fw.bin" ] ||
 	    die "rtlbt-firmware package did not install RTL8822CU firmware"
+	[ -f "${PAYLOAD}/uboot-config.pkg" ] ||
+	    die "missing ${PAYLOAD}/uboot-config.pkg"
+	ASSUME_ALWAYS_YES=yes /usr/local/sbin/pkg -r "${BSDINSTALL_CHROOT}" \
+	    -o REPO_AUTOUPDATE=false add "${PAYLOAD}/uboot-config.pkg"
+	[ -x "${BSDINSTALL_CHROOT}/usr/local/sbin/rk3588-uboot-config" ] ||
+	    die "uboot-config.pkg did not install rk3588-uboot-config"
 
 	loader_conf=${BSDINSTALL_CHROOT}/boot/loader.conf
 	set_config "${loader_conf}" boot_multicons YES
