@@ -1,0 +1,191 @@
+#!/bin/sh
+#-
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Copyright (c) 2026 Fang, Wei-Xiang (Yuri) <am910021@gmail.com>
+#
+
+set -eu
+
+ESP=/boot/efi
+REQUEST_NAME=uboot-env.request
+
+die()
+{
+	echo "${0##*/}: $*" >&2
+	exit 1
+}
+
+usage()
+{
+	echo "usage: ${0##*/} [-e esp-mount] show|clear" >&2
+	echo "       ${0##*/} [-e esp-mount] set name=value [...]" >&2
+	exit 64
+}
+
+is_uint()
+{
+	case "$1" in
+	''|*[!0-9]*) return 1 ;;
+	*) return 0 ;;
+	esac
+}
+
+valid_target()
+{
+	[ "$1" = auto ] && return 0
+	iface=${1%%[0-9]*}
+	rest=${1#"${iface}"}
+	case "${iface}" in
+	mmc|usb|nvme|scsi) ;;
+	*) return 1 ;;
+	esac
+	case "${rest}" in
+	*:*:*) return 1 ;;
+	*:*) ;;
+	*) return 1 ;;
+	esac
+	dev=${rest%%:*}
+	part=${rest#*:}
+	is_uint "${dev}" && [ "${dev}" -le 255 ] &&
+	    is_uint "${part}" && [ "${part}" -ge 1 ] &&
+	    [ "${part}" -le 128 ]
+}
+
+valid_delay()
+{
+	is_uint "$1" && [ "$1" -le 99 ]
+}
+
+valid_title()
+{
+	newline='
+'
+	[ -n "$1" ] && [ "${#1}" -le 80 ] &&
+	    case "$1" in *"${newline}"*) false ;; *) true ;; esac &&
+	    printf '%s\n' "$1" | LC_ALL=C grep -Eq '^[[:print:]]+$'
+}
+
+check_esp()
+{
+	[ "$(id -u)" -eq 0 ] || die "must be run as root"
+	[ -d "${ESP}" ] || die "ESP mount point not found: ${ESP}"
+	mount -p | awk -v path="${ESP}" '
+	    $2 == path && $3 == "msdosfs" { found = 1 }
+	    END { exit !found }
+	' || die "not a mounted msdosfs ESP: ${ESP}"
+}
+
+write_request()
+{
+	request=${ESP}/${REQUEST_NAME}
+	temporary=$(mktemp "${request}.XXXXXX") || die "cannot create request"
+	trap 'rm -f "${temporary}"' EXIT HUP INT TERM
+	{
+		[ "${have_default}" -eq 0 ] ||
+		    printf 'freebsd_default_boot=%s\n' "${default_value}"
+		[ "${have_title}" -eq 0 ] ||
+		    printf 'bootmenu_title=%s\n' "${title_value}"
+		[ "${have_delay}" -eq 0 ] ||
+		    printf 'bootmenu_delay=%s\n' "${delay_value}"
+		[ "${have_logo_delay}" -eq 0 ] ||
+		    printf 'logo_delay=%s\n' "${logo_delay_value}"
+	} >"${temporary}"
+	chmod 600 "${temporary}"
+	mv -f "${temporary}" "${request}"
+	trap - EXIT HUP INT TERM
+	sync
+	echo "Wrote ${request}; settings take effect once at next boot."
+}
+
+self_test()
+{
+	valid_target auto
+	valid_target usb0:2
+	valid_target nvme255:128
+	! valid_target usb256:2
+	! valid_target usb0:0
+	valid_delay 0
+	valid_delay 99
+	! valid_delay 100
+	valid_title '*** FreeBSD U-Boot Boot Menu ***'
+	! valid_title ''
+	echo "${0##*/}: self-test passed"
+}
+
+[ "${1:-}" != self-test ] || {
+	self_test
+	exit
+}
+
+if [ "${1:-}" = -e ]; then
+	[ "$#" -ge 3 ] || usage
+	ESP=${2%/}
+	shift 2
+fi
+[ -n "${ESP}" ] || usage
+command=${1:-}
+[ -n "${command}" ] || usage
+shift
+
+case "${command}" in
+show)
+	[ "$#" -eq 0 ] || usage
+	check_esp
+	if [ -f "${ESP}/${REQUEST_NAME}" ]; then
+		cat "${ESP}/${REQUEST_NAME}"
+	else
+		echo "No pending U-Boot request."
+	fi
+	;;
+clear)
+	[ "$#" -eq 0 ] || usage
+	check_esp
+	rm -f "${ESP}/${REQUEST_NAME}"
+	sync
+	echo "Cleared ${ESP}/${REQUEST_NAME}."
+	;;
+set)
+	[ "$#" -gt 0 ] || usage
+	have_default=0
+	have_title=0
+	have_delay=0
+	have_logo_delay=0
+	for assignment in "$@"; do
+		case "${assignment}" in
+		*=*) name=${assignment%%=*}; value=${assignment#*=} ;;
+		*) die "expected name=value: ${assignment}" ;;
+		esac
+		case "${name}" in
+		freebsd_default_boot)
+			[ "${have_default}" -eq 0 ] || die "duplicate ${name}"
+			valid_target "${value}" || die "invalid boot target: ${value}"
+			have_default=1
+			default_value=${value}
+			;;
+		bootmenu_title)
+			[ "${have_title}" -eq 0 ] || die "duplicate ${name}"
+			valid_title "${value}" || die "invalid menu title"
+			have_title=1
+			title_value=${value}
+			;;
+		bootmenu_delay)
+			[ "${have_delay}" -eq 0 ] || die "duplicate ${name}"
+			valid_delay "${value}" || die "invalid menu delay: ${value}"
+			have_delay=1
+			delay_value=${value}
+			;;
+		logo_delay)
+			[ "${have_logo_delay}" -eq 0 ] || die "duplicate ${name}"
+			valid_delay "${value}" || die "invalid logo delay: ${value}"
+			have_logo_delay=1
+			logo_delay_value=${value}
+			;;
+		*) die "unsupported setting: ${name}" ;;
+		esac
+	done
+	check_esp
+	write_request
+	;;
+*) usage ;;
+esac

@@ -25,11 +25,17 @@ The installer only runs when `/chosen/rockchip,boot-storage` reports eMMC
 (`1`), SD (`2`), or SPI NOR (`9`). This verifies that the system was started
 by the supported RK3588 U-Boot; it does not control the U-Boot write choice.
 
-It also installs the board DTB, EFI loader, and U-Boot menu needed to boot the
-installed system and enables `powerd` for RK3588 DVFS. After the standard
+It also installs the board DTB and EFI loader needed to boot the installed
+system and enables `powerd` for RK3588 DVFS. After the standard
 FreeBSD service selection, the installer offers optional HYM8563 RTC and
 RK3588 hardware watchdog checkboxes. `hym8563`, `dwwdt`, and `watchdogd`
 remain disabled on the installed target unless selected.
+
+### `sysutils/rk3588-uboot-config`
+
+Writes a validated `uboot-env.request` to the mounted EFI System Partition.
+The RK3588 U-Boot consumes it once to update the persistent default boot
+target, menu title, menu delay, or logo delay.
 
 The NanoPC-T6 LTS image builder consumes these ports from
 `src/ports` and supplies board-specific firmware and DTB payloads to the
@@ -42,6 +48,7 @@ Build a port with the normal FreeBSD Ports framework:
 ```sh
 make -C net/realtek-rge-kmod package
 make -C sysutils/rk3588-installer package
+make -C sysutils/rk3588-uboot-config package
 ```
 
 Cross-building `realtek-rge-kmod` requires a matching FreeBSD source and
