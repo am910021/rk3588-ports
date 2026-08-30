@@ -1,5 +1,5 @@
 PORTNAME=	rk3588-uboot-config
-DISTVERSION=	0.1.0
+DISTVERSION=	0.1.1
 CATEGORIES=	sysutils
 
 MAINTAINER=	am910021@gmail.com

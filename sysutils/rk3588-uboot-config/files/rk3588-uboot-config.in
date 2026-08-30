@@ -16,10 +16,25 @@ die()
 	exit 1
 }
 
+help()
+{
+	printf '%s\n' \
+	    "usage: ${0##*/} [-e esp-mount] show|clear" \
+	    "       ${0##*/} [-e esp-mount] set name=value [...]" \
+	    "" \
+	    "Settings:" \
+	    "  freebsd_default_boot  auto or mmcN:P, usbN:P, nvmeN:P, scsiN:P" \
+	    "  bootmenu_title        1-80 printable ASCII characters" \
+	    "  bootmenu_delay        0-99 seconds" \
+	    "  logo_delay            0-99 seconds" \
+	    "" \
+	    "Exact boot-target names are shown by the U-Boot boot menu." \
+	    "The show command displays only the pending one-shot request."
+}
+
 usage()
 {
-	echo "usage: ${0##*/} [-e esp-mount] show|clear" >&2
-	echo "       ${0##*/} [-e esp-mount] set name=value [...]" >&2
+	help >&2
 	exit 64
 }
 
@@ -110,11 +125,17 @@ self_test()
 	! valid_delay 100
 	valid_title '*** FreeBSD U-Boot Boot Menu ***'
 	! valid_title ''
+	help | grep -q freebsd_default_boot
 	echo "${0##*/}: self-test passed"
 }
 
 [ "${1:-}" != self-test ] || {
 	self_test
+	exit
+}
+
+[ "$#" -gt 0 ] || {
+	help
 	exit
 }
 
@@ -129,13 +150,17 @@ command=${1:-}
 shift
 
 case "${command}" in
+help|-h|--help)
+	[ "$#" -eq 0 ] || usage
+	help
+	;;
 show)
 	[ "$#" -eq 0 ] || usage
 	check_esp
 	if [ -f "${ESP}/${REQUEST_NAME}" ]; then
 		cat "${ESP}/${REQUEST_NAME}"
 	else
-		echo "No pending U-Boot request."
+		echo "No pending U-Boot request. Run '${0##*/} help' for settings."
 	fi
 	;;
 clear)
