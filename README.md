@@ -37,6 +37,12 @@ Writes a validated `uboot-env.request` to the mounted EFI System Partition.
 The RK3588 U-Boot consumes it once to update the persistent default boot
 target, menu title, menu delay, or logo delay.
 
+### `sysutils/rk3588-uboot-flash`
+
+Development-only tool that stages a SHA-256-verified, one-shot G98 SPI firmware
+update for U-Boot to apply and verify at the next boot. It is deliberately not
+part of `PORT_ORIGINS` and is not included in installer or production images.
+
 The NanoPC-T6 LTS image builder consumes these ports from
 `src/ports` and supplies board-specific firmware and DTB payloads to the
 installer image.
@@ -49,6 +55,7 @@ Build a port with the normal FreeBSD Ports framework:
 make -C net/realtek-rge-kmod package
 make -C sysutils/rk3588-installer package
 make -C sysutils/rk3588-uboot-config package
+make -C sysutils/rk3588-uboot-flash package
 ```
 
 Cross-building `realtek-rge-kmod` requires a matching FreeBSD source and

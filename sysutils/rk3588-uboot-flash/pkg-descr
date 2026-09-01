@@ -1,0 +1,7 @@
+Development-only tool that validates a G98 firmware-update.bin and stages it
+with a SHA-256-verified one-shot request on the EFI System Partition. The next
+G98 U-Boot verifies the image, updates SPI NOR without overwriting its saved
+environment, verifies the flash contents, and resets.
+
+Power loss during the SPI write still requires Maskrom recovery. This port is
+intentionally not included in RK3588 installer or production images.
