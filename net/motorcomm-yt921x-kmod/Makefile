@@ -9,10 +9,14 @@ COMMENT=	Kernel module for Motorcomm YT921x Ethernet switches
 
 LICENSE=	BSD2CLAUSE
 
-DISTFILES=
 USES=		kmod uidfix
 
-WRKSRC=		${WRKDIR}/src
+USE_GITHUB=	yes
+GH_ACCOUNT=	am910021
+GH_PROJECT=	if_yt921x_freebsd
+GH_TAGNAME=	97e09a3d7447d370c91386e88d0d593f22a73133
+
+WRKSRC_SUBDIR=	src
 
 MAKE_ENV+=	MACHINE="${MACHINE}" MACHINE_ARCH="${MACHINE_ARCH}"
 .if defined(TARGET)
@@ -26,11 +30,5 @@ MAKE_ENV+=	KERNBUILDDIR="${KERNBUILDDIR}"
 .endif
 
 PLIST_FILES=	${KMODDIR}/yt921x.ko
-
-# ponytail: keep the validation snapshot self-contained until the source
-# repository is published; replace this with USE_GITHUB for a release.
-do-extract:
-	${MKDIR} ${WRKSRC}
-	${CP} ${FILESDIR}/Makefile ${FILESDIR}/if_yt921x.c ${WRKSRC}
 
 .include <bsd.port.mk>
