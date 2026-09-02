@@ -1,0 +1,10 @@
+[
+{ type: install
+  message: <<EOM
+Add the following line to /boot/loader.conf on boards with a YT921x switch:
+
+yt921x_load="YES"
+
+EOM
+}
+]

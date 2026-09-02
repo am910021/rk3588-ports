@@ -599,6 +599,13 @@ configure_target()
 	    -C "${BSDINSTALL_CHROOT}"
 	[ -f "${BSDINSTALL_CHROOT}/boot/modules/if_rge.ko" ] ||
 	    die "if_rge.pkg did not install if_rge.ko"
+	if [ -f "${PAYLOAD}/yt921x.pkg" ]; then
+		ASSUME_ALWAYS_YES=yes /usr/local/sbin/pkg \
+		    -r "${BSDINSTALL_CHROOT}" -o REPO_AUTOUPDATE=false \
+		    add "${PAYLOAD}/yt921x.pkg"
+		[ -f "${BSDINSTALL_CHROOT}/boot/modules/yt921x.ko" ] ||
+		    die "yt921x.pkg did not install yt921x.ko"
+	fi
 	[ -f "${PAYLOAD}/rtlbt-firmware.pkg" ] ||
 	    die "missing ${PAYLOAD}/rtlbt-firmware.pkg"
 	ASSUME_ALWAYS_YES=yes /usr/local/sbin/pkg -r "${BSDINSTALL_CHROOT}" \
