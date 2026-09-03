@@ -1,5 +1,6 @@
 PORTNAME=	yt921x
 PORTVERSION=	20260903
+PORTREVISION=	1
 CATEGORIES=	net
 PKGNAMEPREFIX=	motorcomm-
 PKGNAMESUFFIX=	-kmod
@@ -10,6 +11,7 @@ COMMENT=	Kernel module for Motorcomm YT921x Ethernet switches
 LICENSE=	BSD2CLAUSE
 
 USES=		kmod uidfix
+USE_RC_SUBR=	yt921x_config
 
 USE_GITHUB=	yes
 GH_ACCOUNT=	am910021

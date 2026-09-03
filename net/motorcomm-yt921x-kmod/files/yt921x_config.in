@@ -1,0 +1,182 @@
+#!/bin/sh
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Copyright (c) 2026 Fang, Wei-Xiang (Yuri) <am910021@gmail.com>
+#
+
+# PROVIDE: yt921x_config
+# REQUIRE: FILESYSTEMS kld
+# BEFORE: netif
+# KEYWORD: nojail
+
+. /etc/rc.subr
+
+name="yt921x_config"
+desc="Apply persistent Motorcomm YT921x access VLAN policy"
+rcvar="yt921x_config_enable"
+start_cmd="yt921x_config_start"
+stop_cmd="yt921x_config_stop"
+extra_commands="validate"
+validate_cmd="yt921x_config_validate"
+state_file="/var/run/${name}.state"
+
+load_rc_config "$name"
+: ${yt921x_config_enable:="NO"}
+: ${yt921x_config_switches:=""}
+
+yt921x_config_parse()
+{
+	_yc_spec=$1
+	_yc_device=${_yc_spec%%:*}
+	_yc_vids=${_yc_spec#*:}
+
+	if [ "${_yc_device}" = "${_yc_spec}" ]; then
+		err 1 "invalid switch policy: ${_yc_spec}"
+	fi
+	case "${_yc_device}" in
+	etherswitch[0-9]*) ;;
+	*) err 1 "invalid etherswitch device: ${_yc_device}" ;;
+	esac
+	if [ ! -c "/dev/${_yc_device}" ]; then
+		err 1 "missing switch device: /dev/${_yc_device}"
+	fi
+
+	_yc_old_ifs=$IFS
+	IFS=,
+	set -- ${_yc_vids}
+	IFS=${_yc_old_ifs}
+	if [ "$#" -ne 4 ]; then
+		err 1 "${_yc_device} requires exactly four access VLANs"
+	fi
+
+	_yc_seen=" "
+	for _yc_vid do
+		case "${_yc_vid}" in
+		""|*[!0-9]*) err 1 "invalid VLAN ID: ${_yc_vid}" ;;
+		esac
+		if [ "${_yc_vid}" -lt 2 ] || [ "${_yc_vid}" -gt 4094 ]; then
+			err 1 "VLAN ID out of range: ${_yc_vid}"
+		fi
+		case "${_yc_seen}" in
+		*" ${_yc_vid} "*) err 1 "duplicate VLAN ID: ${_yc_vid}" ;;
+		esac
+		_yc_seen="${_yc_seen}${_yc_vid} "
+	done
+}
+
+yt921x_config_validate()
+{
+	if [ -z "${yt921x_config_switches}" ]; then
+		err 1 "yt921x_config_switches is empty"
+	fi
+	if [ ! -x /sbin/etherswitchcfg ]; then
+		err 1 "missing /sbin/etherswitchcfg"
+	fi
+
+	_yc_devices=" "
+	for _yc_spec in ${yt921x_config_switches}; do
+		yt921x_config_parse "${_yc_spec}"
+		case "${_yc_devices}" in
+		*" ${_yc_device} "*) err 1 "duplicate switch device: ${_yc_device}" ;;
+		esac
+		_yc_devices="${_yc_devices}${_yc_device} "
+	done
+}
+
+yt921x_config_run()
+{
+	_yc_run_device=$1
+	shift
+	/sbin/etherswitchcfg -f "/dev/${_yc_run_device}" "$@" >/dev/null
+}
+
+yt921x_config_apply()
+{
+	yt921x_config_parse "$1"
+	_yc_apply_device=${_yc_device}
+	_yc_apply_vids=${_yc_vids}
+
+	yt921x_config_run "${_yc_apply_device}" config vlan_mode dot1q || return
+	yt921x_config_run "${_yc_apply_device}" vlangroup1 vlan 1 members 4t || return
+	yt921x_config_run "${_yc_apply_device}" port4 pvid 1 || return
+	yt921x_config_run "${_yc_apply_device}" port4 ingress dropuntagged \
+	    -droptagged || return
+
+	_yc_old_ifs=$IFS
+	IFS=,
+	set -- ${_yc_apply_vids}
+	IFS=${_yc_old_ifs}
+	_yc_port=0
+	for _yc_vid do
+		yt921x_config_run "${_yc_apply_device}" \
+		    "vlangroup${_yc_vid}" vlan "${_yc_vid}" \
+		    members "${_yc_port},4t" || return
+		yt921x_config_run "${_yc_apply_device}" "port${_yc_port}" \
+		    pvid "${_yc_vid}" || return
+		yt921x_config_run "${_yc_apply_device}" "port${_yc_port}" \
+		    ingress droptagged -dropuntagged || return
+		_yc_port=$((_yc_port + 1))
+	done
+}
+
+yt921x_config_clear()
+{
+	yt921x_config_parse "$1" || return
+	_yc_clear_device=${_yc_device}
+	_yc_clear_vids=${_yc_vids}
+
+	_yc_old_ifs=$IFS
+	IFS=,
+	set -- ${_yc_clear_vids}
+	IFS=${_yc_old_ifs}
+	_yc_port=0
+	for _yc_vid do
+		yt921x_config_run "${_yc_clear_device}" "port${_yc_port}" \
+		    -ingress -droptagged -dropuntagged >/dev/null 2>&1 || true
+		yt921x_config_run "${_yc_clear_device}" "port${_yc_port}" \
+		    pvid 1 >/dev/null 2>&1 || true
+		yt921x_config_run "${_yc_clear_device}" \
+		    "vlangroup${_yc_vid}" vlan 0 >/dev/null 2>&1 || true
+		_yc_port=$((_yc_port + 1))
+	done
+	yt921x_config_run "${_yc_clear_device}" port4 \
+	    -ingress -dropuntagged -droptagged >/dev/null 2>&1 || true
+	yt921x_config_run "${_yc_clear_device}" port4 pvid 1 \
+	    >/dev/null 2>&1 || true
+	yt921x_config_run "${_yc_clear_device}" vlangroup1 vlan 0 \
+	    >/dev/null 2>&1 || true
+	yt921x_config_run "${_yc_clear_device}" config vlan_mode none \
+	    >/dev/null 2>&1 || true
+}
+
+yt921x_config_start()
+{
+	yt921x_config_validate
+	_yc_applied=""
+	for _yc_spec in ${yt921x_config_switches}; do
+		if ! yt921x_config_apply "${_yc_spec}"; then
+			warn "failed to apply ${_yc_spec}; restoring non-VLAN mode"
+			for _yc_rollback in ${_yc_applied} ${_yc_spec}; do
+				yt921x_config_clear "${_yc_rollback}"
+			done
+			return 1
+		fi
+		_yc_applied="${_yc_applied} ${_yc_spec}"
+	done
+	printf '%s\n' "${yt921x_config_switches}" > "${state_file}"
+}
+
+yt921x_config_stop()
+{
+	_yc_specs=${yt921x_config_switches}
+	if [ -r "${state_file}" ]; then
+		IFS= read -r _yc_specs < "${state_file}" || true
+	fi
+	for _yc_spec in ${_yc_specs}; do
+		yt921x_config_clear "${_yc_spec}"
+	done
+	rm -f "${state_file}"
+}
+
+run_rc_command "$1"

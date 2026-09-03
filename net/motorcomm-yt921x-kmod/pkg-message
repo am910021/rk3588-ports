@@ -5,6 +5,21 @@ Add the following line to /boot/loader.conf on boards with a YT921x switch:
 
 yt921x_load="YES"
 
+To persist four access VLANs per switch, add this to /etc/rc.conf:
+
+yt921x_config_enable="YES"
+yt921x_config_switches="etherswitch0:101,102,103,104 etherswitch1:201,202,203,204"
+
+Validate without changing hardware, then apply the policy:
+
+service yt921x_config validate
+service yt921x_config start
+
+Configure the corresponding FreeBSD vlan(4) interfaces through the standard
+rc.conf vlans_eqos0/vlans_eqos1 and ifconfig variables.  The service configures
+only switch VLAN/PVID membership and deliberately does not assign IP addresses.
+Set ifconfig_eqos0="up" and ifconfig_eqos1="up" when using both CPU links.
+
 EOM
 }
 ]
