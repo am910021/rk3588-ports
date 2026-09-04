@@ -638,6 +638,19 @@ configure_target()
 		    die "installed kernel does not provide dwwdt.ko"
 	fi
 	set_config "${loader_conf}" dwwdt_load "${enable_watchdog}"
+	if [ "${enable_rtc}" = YES ]; then
+		devmatch_rtc=-=hym8563
+	else
+		devmatch_rtc=+=hym8563
+	fi
+	if [ "${enable_watchdog}" = YES ]; then
+		devmatch_watchdog=-=dwwdt
+	else
+		devmatch_watchdog=+=dwwdt
+	fi
+	sysrc -q -R "${BSDINSTALL_CHROOT}" \
+	    "devmatch_blocklist${devmatch_rtc}" \
+	    "devmatch_blocklist${devmatch_watchdog}"
 	sysrc -q -R "${BSDINSTALL_CHROOT}" \
 	    watchdogd_enable="${enable_watchdog}"
 	if [ "${filesystem}" = ufs ]; then
