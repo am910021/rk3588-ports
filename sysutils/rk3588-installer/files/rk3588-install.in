@@ -171,6 +171,18 @@ supported_target()
 	is_uint "${unit}"
 }
 
+uboot_target()
+{
+	case "$1" in
+	mmcsd*) echo "mmc${1#mmcsd}:2" ;;
+	ada*) echo "scsi${1#ada}:2" ;;
+	da*) echo "usb${1#da}:2" ;;
+	nda*) echo "nvme${1#nda}:2" ;;
+	nvd*) echo "nvme${1#nvd}:2" ;;
+	*) return 1 ;;
+	esac
+}
+
 target_description()
 {
 	diskinfo -v "/dev/$1" | awk '
@@ -667,6 +679,11 @@ configure_target()
 	fi
 	sysrc -q -R "${BSDINSTALL_CHROOT}" \
 	    ntpd_enable=YES ntpd_sync_on_start=YES powerd_enable=YES
+	boot_target=$(uboot_target "${target_disk}") ||
+	    die "cannot map ${target_disk} to a U-Boot target"
+	"${BSDINSTALL_CHROOT}/usr/local/sbin/rk3588-uboot-config" \
+	    -e "${BSDINSTALL_CHROOT}/boot/efi" set \
+	    freebsd_default_boot="${boot_target}"
 }
 
 configure_freebsd()
@@ -797,6 +814,11 @@ EOF
 		supported_target "${disk}" ||
 		    die "selftest: ${disk} must be supported"
 	done
+	assert_eq "$(uboot_target mmcsd12)" mmc12:2
+	assert_eq "$(uboot_target ada0)" scsi0:2
+	assert_eq "$(uboot_target da3)" usb3:2
+	assert_eq "$(uboot_target nda0)" nvme0:2
+	assert_eq "$(uboot_target nvd2)" nvme2:2
 	for disk in mmcsd0p1 ada0p2 da nda0p1 nvd-1 nvme0 cd0; do
 		if supported_target "${disk}"; then
 			die "selftest: ${disk} must not be supported"
