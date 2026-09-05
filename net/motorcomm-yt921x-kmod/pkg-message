@@ -10,6 +10,14 @@ To persist four access VLANs per switch, add this to /etc/rc.conf:
 yt921x_config_enable="YES"
 yt921x_config_switches="etherswitch0:101,102,103,104 etherswitch1:201,202,203,204"
 
+The four VLAN IDs map to external ports 0 through 3. Repeat a VLAN ID to
+place multiple ports in one hardware-switched group, for example:
+
+yt921x_config_switches="etherswitch0:101,101,103,103"
+
+List each unique VLAN only once in vlans_eqosN so each group has one vlan(4)
+interface (for the example above: vlans_eqos0="vlan101 vlan103").
+
 Validate without changing hardware, then apply the policy:
 
 service yt921x_config validate

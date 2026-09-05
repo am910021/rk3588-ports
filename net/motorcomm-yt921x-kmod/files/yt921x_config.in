@@ -17,8 +17,9 @@ desc="Apply persistent Motorcomm YT921x access VLAN policy"
 rcvar="yt921x_config_enable"
 start_cmd="yt921x_config_start"
 stop_cmd="yt921x_config_stop"
-extra_commands="validate"
+extra_commands="validate selftest"
 validate_cmd="yt921x_config_validate"
+selftest_cmd="yt921x_config_selftest"
 state_file="/var/run/${name}.state"
 
 load_rc_config "$name"
@@ -47,10 +48,10 @@ yt921x_config_parse()
 	set -- ${_yc_vids}
 	IFS=${_yc_old_ifs}
 	if [ "$#" -ne 4 ]; then
-		err 1 "${_yc_device} requires exactly four access VLANs"
+		err 1 "${_yc_device} requires exactly four port VLAN IDs"
 	fi
 
-	_yc_seen=" "
+	_yc_vid_list=
 	for _yc_vid do
 		case "${_yc_vid}" in
 		""|*[!0-9]*) err 1 "invalid VLAN ID: ${_yc_vid}" ;;
@@ -58,11 +59,34 @@ yt921x_config_parse()
 		if [ "${_yc_vid}" -lt 2 ] || [ "${_yc_vid}" -gt 4094 ]; then
 			err 1 "VLAN ID out of range: ${_yc_vid}"
 		fi
-		case "${_yc_seen}" in
-		*" ${_yc_vid} "*) err 1 "duplicate VLAN ID: ${_yc_vid}" ;;
-		esac
-		_yc_seen="${_yc_seen}${_yc_vid} "
+		_yc_vid_list="${_yc_vid_list}${_yc_vid_list:+ }${_yc_vid}"
 	done
+}
+
+yt921x_config_members()
+{
+	_yc_member_list=$1
+	_yc_member_vid=$2
+	_yc_members=
+	_yc_member_port=0
+	for _yc_port_vid in ${_yc_member_list}; do
+		if [ "${_yc_port_vid}" = "${_yc_member_vid}" ]; then
+			_yc_members="${_yc_members}${_yc_members:+,}${_yc_member_port}"
+		fi
+		_yc_member_port=$((_yc_member_port + 1))
+	done
+	echo "${_yc_members},4t"
+}
+
+yt921x_config_selftest()
+{
+	[ "$(yt921x_config_members '101 102 103 104' 102)" = "1,4t" ] ||
+		err 1 "separate VLAN membership selftest failed"
+	[ "$(yt921x_config_members '101 101 103 103' 101)" = "0,1,4t" ] ||
+		err 1 "paired VLAN membership selftest failed"
+	[ "$(yt921x_config_members '101 102 102 104' 102)" = "1,2,4t" ] ||
+		err 1 "mixed VLAN membership selftest failed"
+	echo "yt921x_config selftest passed"
 }
 
 yt921x_config_validate()
@@ -95,7 +119,6 @@ yt921x_config_apply()
 {
 	yt921x_config_parse "$1"
 	_yc_apply_device=${_yc_device}
-	_yc_apply_vids=${_yc_vids}
 
 	yt921x_config_run "${_yc_apply_device}" config vlan_mode dot1q || return
 	yt921x_config_run "${_yc_apply_device}" vlangroup1 vlan 1 members 4t || return
@@ -103,15 +126,20 @@ yt921x_config_apply()
 	yt921x_config_run "${_yc_apply_device}" port4 ingress dropuntagged \
 	    -droptagged || return
 
-	_yc_old_ifs=$IFS
-	IFS=,
-	set -- ${_yc_apply_vids}
-	IFS=${_yc_old_ifs}
-	_yc_port=0
-	for _yc_vid do
+	_yc_seen=" "
+	for _yc_vid in ${_yc_vid_list}; do
+		case "${_yc_seen}" in
+		*" ${_yc_vid} "*) continue ;;
+		esac
+		_yc_seen="${_yc_seen}${_yc_vid} "
+		_yc_members=$(yt921x_config_members "${_yc_vid_list}" "${_yc_vid}")
 		yt921x_config_run "${_yc_apply_device}" \
 		    "vlangroup${_yc_vid}" vlan "${_yc_vid}" \
-		    members "${_yc_port},4t" || return
+		    members "${_yc_members}" || return
+	done
+
+	_yc_port=0
+	for _yc_vid in ${_yc_vid_list}; do
 		yt921x_config_run "${_yc_apply_device}" "port${_yc_port}" \
 		    pvid "${_yc_vid}" || return
 		yt921x_config_run "${_yc_apply_device}" "port${_yc_port}" \
@@ -124,21 +152,23 @@ yt921x_config_clear()
 {
 	yt921x_config_parse "$1" || return
 	_yc_clear_device=${_yc_device}
-	_yc_clear_vids=${_yc_vids}
 
-	_yc_old_ifs=$IFS
-	IFS=,
-	set -- ${_yc_clear_vids}
-	IFS=${_yc_old_ifs}
 	_yc_port=0
-	for _yc_vid do
+	for _yc_vid in ${_yc_vid_list}; do
 		yt921x_config_run "${_yc_clear_device}" "port${_yc_port}" \
 		    -ingress -droptagged -dropuntagged >/dev/null 2>&1 || true
 		yt921x_config_run "${_yc_clear_device}" "port${_yc_port}" \
 		    pvid 1 >/dev/null 2>&1 || true
+		_yc_port=$((_yc_port + 1))
+	done
+	_yc_seen=" "
+	for _yc_vid in ${_yc_vid_list}; do
+		case "${_yc_seen}" in
+		*" ${_yc_vid} "*) continue ;;
+		esac
+		_yc_seen="${_yc_seen}${_yc_vid} "
 		yt921x_config_run "${_yc_clear_device}" \
 		    "vlangroup${_yc_vid}" vlan 0 >/dev/null 2>&1 || true
-		_yc_port=$((_yc_port + 1))
 	done
 	yt921x_config_run "${_yc_clear_device}" port4 \
 	    -ingress -dropuntagged -droptagged >/dev/null 2>&1 || true
