@@ -22,7 +22,7 @@ help()
 	    "usage: ${0##*/} [-e esp-mount] show [list|next|now|watchdog]" \
 	    "       ${0##*/} [-e esp-mount] clear" \
 	    "       ${0##*/} [-e esp-mount] set name=value [...]" \
-	    "       ${0##*/} [-e esp-mount] watchdog off|on {15|30|45|60}" \
+	    "       ${0##*/} [-e esp-mount] watchdog off|on 60" \
 	    "" \
 	    "Settings:" \
 	    "  freebsd_default_boot  auto or mmcN:P, usbN:P, nvmeN:P, scsiN:P" \
@@ -30,7 +30,7 @@ help()
 	    "  bootmenu_delay        0-99 seconds" \
 	    "  logo_delay            0-99 seconds" \
 	    "  freebsd_watchdog_enable  0 or 1" \
-	    "  freebsd_watchdog_timeout 15, 30, 45, or 60 seconds" \
+	    "  freebsd_watchdog_timeout 60 seconds" \
 	    "" \
 	    "show list  List targets detected by the current U-Boot." \
 	    "show now   Show the target selected for this boot." \
@@ -80,7 +80,7 @@ valid_delay()
 
 valid_watchdog_timeout()
 {
-	case "$1" in 15|30|45|60) return 0 ;; *) return 1 ;; esac
+	[ "$1" = 60 ]
 }
 
 valid_title()
@@ -184,8 +184,8 @@ self_test()
 	valid_delay 0
 	valid_delay 99
 	! valid_delay 100
-	valid_watchdog_timeout 15
 	valid_watchdog_timeout 60
+	! valid_watchdog_timeout 15
 	! valid_watchdog_timeout 0
 	valid_title '*** FreeBSD U-Boot Boot Menu ***'
 	! valid_title ''
