@@ -1,3 +1,4 @@
 Writes a validated uboot-env.request file to an RK3588 system's EFI System
 Partition.  On the next boot, the board's U-Boot applies the requested menu
-settings to its persistent environment and removes all request files.
+and watchdog settings to its persistent environment and removes all request
+files.
