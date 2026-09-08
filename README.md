@@ -35,7 +35,18 @@ remain disabled on the installed target unless selected.
 
 Writes a validated `uboot-env.request` to the mounted EFI System Partition.
 The RK3588 U-Boot consumes it once to update the persistent default boot
-target, menu title, menu delay, or logo delay.
+target, menu title, menu delay, logo delay, or boot watchdog state. The boot
+watchdog defaults to disabled with a saved 60-second request; the currently
+validated controls are:
+
+```sh
+rk3588-uboot-config watchdog on 60
+rk3588-uboot-config watchdog off
+rk3588-uboot-config show watchdog
+```
+
+Shorter requests are rejected because they can expire before FreeBSD starts
+`watchdogd`.
 
 ### `sysutils/rk3588-uboot-flash`
 
