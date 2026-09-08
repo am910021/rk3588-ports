@@ -13,6 +13,7 @@ IMAGE_NAME=firmware-update.bin
 SPI_REQUEST_NAME=uboot-spi-update.request
 COMPAT_PREFIX=RK3588-FW-COMPAT-V1:
 VERSION_PREFIX=RK3588-FW-VERSION-V1:
+TARGET_PREFIX=RK3588-FW-TARGET-V1:
 
 die()
 {
@@ -43,7 +44,7 @@ help()
 	    "show now   Show the target selected for this boot." \
 	    "show next  Show the pending one-shot request (default for bare show)." \
 	    "show watchdog  Show the watchdog state used for this boot." \
-	    "upgrade  Verify and stage a compatible one-shot SPI firmware update."
+	    "upgrade  Verify and stage a compatible one-shot firmware update."
 }
 
 usage()
@@ -114,11 +115,13 @@ load_firmware_identity()
 {
 	EXPECTED_COMPAT=$(ofwdump -P freebsd,uboot-firmware-compat -S /chosen 2>/dev/null || true)
 	UPDATE_SIZE=$(ofwdump -P freebsd,uboot-firmware-size -S /chosen 2>/dev/null || true)
+	FIRMWARE_STORAGE=$(ofwdump -P freebsd,uboot-firmware-storage -S /chosen 2>/dev/null || true)
 	[ -n "${EXPECTED_COMPAT}" ] ||
 	    die "current U-Boot does not support EFI-staged firmware updates"
 	case "${EXPECTED_COMPAT}" in *[!A-Za-z0-9:._-]*) die "invalid running firmware marker" ;; esac
 	case "${UPDATE_SIZE}" in ''|*[!0-9]*) die "invalid running firmware size" ;; esac
 	[ "${UPDATE_SIZE}" -gt 0 ] || die "invalid running firmware size"
+	case "${FIRMWARE_STORAGE}" in MMC|SPI) ;; *) die "invalid running firmware storage" ;; esac
 }
 
 verify_firmware()
@@ -126,22 +129,41 @@ verify_firmware()
 	image=$1
 	[ -f "${image}" ] || die "firmware image not found: ${image}"
 	size=$(stat -f '%z' "${image}") || die "cannot stat ${image}"
-	[ "${size}" -eq "${UPDATE_SIZE}" ] ||
-	    die "invalid image size ${size}; expected ${UPDATE_SIZE}"
-	wanted=${COMPAT_PREFIX}${EXPECTED_COMPAT}
-	counts=$(LC_ALL=C strings -a "${image}" | awk -v prefix="${COMPAT_PREFIX}" -v wanted="${wanted}" '
-	    index($0, prefix) == 1 { total++; if ($0 == wanted) matched++ }
-	    END { printf "%u:%u", total, matched }
-	')
-	[ "${counts}" = 1:1 ] ||
-	    die "firmware compatibility marker does not match ${EXPECTED_COMPAT}"
+	candidate=$(LC_ALL=C strings -a "${image}" | awk -v prefix="${COMPAT_PREFIX}" '
+	    index($0, prefix) == 1 { total++; value=substr($0, length(prefix) + 1) }
+	    END { if (total == 1) print value; else exit 1 }
+	') || die "firmware compatibility marker is missing or duplicated"
+	target=$(dd if="${image}" bs=512 skip=$((size / 512 - 1)) count=1 status=none |
+	    LC_ALL=C strings -a | awk -v prefix="${TARGET_PREFIX}" '
+	    index($0, prefix) == 1 { total++; value=substr($0, length(prefix) + 1) }
+	    END { if (total == 1) print value; else exit 1 }
+	') || die "firmware target marker is missing or duplicated"
+	board=${EXPECTED_COMPAT%%:*}
+	capacity=${EXPECTED_COMPAT##*:}
+	expected_target=${board}:${FIRMWARE_STORAGE}:${capacity}
+	if [ "${candidate}" = "${EXPECTED_COMPAT}" ]; then
+		[ "${size}" -eq "${UPDATE_SIZE}" ] ||
+		    die "invalid image size ${size}; expected ${UPDATE_SIZE}"
+		[ "${target}" = "${expected_target}" ] ||
+		    die "firmware target ${target} does not match ${expected_target}"
+	elif [ "${FIRMWARE_STORAGE}" = SPI ] &&
+	    [ "${EXPECTED_COMPAT}" = "${EXPECTED_COMPAT%:SPI:16M}:SPI:16M" ] &&
+	    [ "${candidate}" = "${EXPECTED_COMPAT%:SPI:16M}:SPI:32M" ]; then
+		[ "${size}" -eq 33030144 ] ||
+		    die "invalid 32M migration image size ${size}; expected 33030144"
+		[ "${target}" = "${board}:SPI:32M" ] ||
+		    die "invalid SPI migration target ${target}"
+	else
+		die "firmware compatibility marker does not match ${EXPECTED_COMPAT}"
+	fi
 	version=$(LC_ALL=C strings -a "${image}" | awk -v prefix="${VERSION_PREFIX}" '
 	    index($0, prefix) == 1 { total++; value=$0 }
 	    END { if (total == 1) print value; else exit 1 }
 	') || die "firmware version marker is missing or duplicated"
 	digest=$(sha256 -q "${image}") || die "cannot hash ${image}"
-	printf 'compat=%s\nsize=%s\nsha256=%s\nversion=%s\n' \
-	    "${EXPECTED_COMPAT}" "${size}" "${digest}" "${version#${VERSION_PREFIX}}"
+	printf 'compat=%s\ntarget=%s\nsize=%s\nsha256=%s\nversion=%s\n' \
+	    "${candidate}" "${target}" "${size}" "${digest}" \
+	    "${version#${VERSION_PREFIX}}"
 }
 
 stage_firmware()
@@ -149,6 +171,7 @@ stage_firmware()
 	image=$1
 	metadata=$(verify_firmware "${image}")
 	digest=$(printf '%s\n' "${metadata}" | awk -F= '$1 == "sha256" { print $2 }')
+	size=$(printf '%s\n' "${metadata}" | awk -F= '$1 == "size" { print $2 }')
 	request=${ESP}/${SPI_REQUEST_NAME}
 	payload=${ESP}/${IMAGE_NAME}
 	payload_tmp=$(mktemp "${payload}.XXXXXX") || die "cannot create payload"
@@ -161,7 +184,7 @@ stage_firmware()
 	mv -f "${payload_tmp}" "${payload}"
 	{
 		printf 'version=1\n'
-		printf 'size=%s\n' "${UPDATE_SIZE}"
+		printf 'size=%s\n' "${size}"
 		printf 'sha256=%s\n' "${digest}"
 	} >"${request_tmp}"
 	chmod 600 "${request_tmp}"
@@ -171,7 +194,7 @@ stage_firmware()
 	printf '%s\n' "${metadata}" \
 	    "Staged ${payload}" \
 	    "Staged one-shot request ${request}" \
-	    "Reboot to update SPI; do not remove power during the U-Boot update."
+	    "Reboot to update ${FIRMWARE_STORAGE}; do not remove power during the U-Boot update."
 }
 
 write_request()
@@ -250,12 +273,28 @@ self_test()
 {
 	EXPECTED_COMPAT=G98:SPI:16M
 	UPDATE_SIZE=16252928
+	FIRMWARE_STORAGE=SPI
 	test_image=$(mktemp -t rk3588-uboot-tools) || exit 1
-	trap 'rm -f "${test_image}"' EXIT HUP INT TERM
+	migration_image=$(mktemp -t rk3588-uboot-tools-migration) || exit 1
+	trap 'rm -f "${test_image}" "${migration_image}"' EXIT HUP INT TERM
 	truncate -s "${UPDATE_SIZE}" "${test_image}"
 	printf '%s\0%s\0' "${COMPAT_PREFIX}${EXPECTED_COMPAT}" \
 	    "${VERSION_PREFIX}self-test" | dd of="${test_image}" conv=notrunc status=none
+	printf '%s\0' "${TARGET_PREFIX}G98:SPI:16M" | dd of="${test_image}" \
+	    bs=1 seek=$((UPDATE_SIZE - 512)) conv=notrunc status=none
 	verify_firmware "${test_image}" | grep -q '^sha256='
+	FIRMWARE_STORAGE=MMC
+	printf '%s\0' "${TARGET_PREFIX}G98:MMC:16M" | dd of="${test_image}" \
+	    bs=1 seek=$((UPDATE_SIZE - 512)) conv=notrunc status=none
+	verify_firmware "${test_image}" | grep -q '^target=G98:MMC:16M$'
+	FIRMWARE_STORAGE=SPI
+	truncate -s 33030144 "${migration_image}"
+	printf '%s\0%s\0' "${COMPAT_PREFIX}G98:SPI:32M" \
+	    "${VERSION_PREFIX}migration-self-test" | dd of="${migration_image}" \
+	    conv=notrunc status=none
+	printf '%s\0' "${TARGET_PREFIX}G98:SPI:32M" | dd of="${migration_image}" \
+	    bs=1 seek=$((33030144 - 512)) conv=notrunc status=none
+	verify_firmware "${migration_image}" | grep -q '^compat=G98:SPI:32M$'
 	valid_target auto
 	valid_target usb0:2
 	valid_target nvme255:128
