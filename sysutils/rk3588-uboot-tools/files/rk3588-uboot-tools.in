@@ -9,6 +9,10 @@ set -eu
 
 ESP=/boot/efi
 REQUEST_NAME=uboot-env.request
+IMAGE_NAME=firmware-update.bin
+SPI_REQUEST_NAME=uboot-spi-update.request
+COMPAT_PREFIX=RK3588-FW-COMPAT-V1:
+VERSION_PREFIX=RK3588-FW-VERSION-V1:
 
 die()
 {
@@ -23,6 +27,9 @@ help()
 	    "       ${0##*/} [-e esp-mount] clear" \
 	    "       ${0##*/} [-e esp-mount] set name=value [...]" \
 	    "       ${0##*/} [-e esp-mount] watchdog off|on 60" \
+	    "       ${0##*/} [-e esp-mount] upgrade firmware-update.bin" \
+	    "       ${0##*/} [-e esp-mount] upgrade verify firmware-update.bin" \
+	    "       ${0##*/} [-e esp-mount] upgrade show|clear" \
 	    "" \
 	    "Settings:" \
 	    "  freebsd_default_boot  auto or mmcN:P, usbN:P, nvmeN:P, scsiN:P" \
@@ -35,7 +42,8 @@ help()
 	    "show list  List targets detected by the current U-Boot." \
 	    "show now   Show the target selected for this boot." \
 	    "show next  Show the pending one-shot request (default for bare show)." \
-	    "show watchdog  Show the watchdog state used for this boot."
+	    "show watchdog  Show the watchdog state used for this boot." \
+	    "upgrade  Verify and stage a compatible one-shot SPI firmware update."
 }
 
 usage()
@@ -100,6 +108,70 @@ check_esp()
 	    $2 == path && $3 == "msdosfs" { found = 1 }
 	    END { exit !found }
 	' || die "not a mounted msdosfs ESP: ${ESP}"
+}
+
+load_firmware_identity()
+{
+	EXPECTED_COMPAT=$(ofwdump -P freebsd,uboot-firmware-compat -S /chosen 2>/dev/null || true)
+	UPDATE_SIZE=$(ofwdump -P freebsd,uboot-firmware-size -S /chosen 2>/dev/null || true)
+	[ -n "${EXPECTED_COMPAT}" ] ||
+	    die "current U-Boot does not support EFI-staged firmware updates"
+	case "${EXPECTED_COMPAT}" in *[!A-Za-z0-9:._-]*) die "invalid running firmware marker" ;; esac
+	case "${UPDATE_SIZE}" in ''|*[!0-9]*) die "invalid running firmware size" ;; esac
+	[ "${UPDATE_SIZE}" -gt 0 ] || die "invalid running firmware size"
+}
+
+verify_firmware()
+{
+	image=$1
+	[ -f "${image}" ] || die "firmware image not found: ${image}"
+	size=$(stat -f '%z' "${image}") || die "cannot stat ${image}"
+	[ "${size}" -eq "${UPDATE_SIZE}" ] ||
+	    die "invalid image size ${size}; expected ${UPDATE_SIZE}"
+	wanted=${COMPAT_PREFIX}${EXPECTED_COMPAT}
+	counts=$(LC_ALL=C strings -a "${image}" | awk -v prefix="${COMPAT_PREFIX}" -v wanted="${wanted}" '
+	    index($0, prefix) == 1 { total++; if ($0 == wanted) matched++ }
+	    END { printf "%u:%u", total, matched }
+	')
+	[ "${counts}" = 1:1 ] ||
+	    die "firmware compatibility marker does not match ${EXPECTED_COMPAT}"
+	version=$(LC_ALL=C strings -a "${image}" | awk -v prefix="${VERSION_PREFIX}" '
+	    index($0, prefix) == 1 { total++; value=$0 }
+	    END { if (total == 1) print value; else exit 1 }
+	') || die "firmware version marker is missing or duplicated"
+	digest=$(sha256 -q "${image}") || die "cannot hash ${image}"
+	printf 'compat=%s\nsize=%s\nsha256=%s\nversion=%s\n' \
+	    "${EXPECTED_COMPAT}" "${size}" "${digest}" "${version#${VERSION_PREFIX}}"
+}
+
+stage_firmware()
+{
+	image=$1
+	metadata=$(verify_firmware "${image}")
+	digest=$(printf '%s\n' "${metadata}" | awk -F= '$1 == "sha256" { print $2 }')
+	request=${ESP}/${SPI_REQUEST_NAME}
+	payload=${ESP}/${IMAGE_NAME}
+	payload_tmp=$(mktemp "${payload}.XXXXXX") || die "cannot create payload"
+	request_tmp=
+	trap 'rm -f "${payload_tmp}" "${request_tmp}"' EXIT HUP INT TERM
+	request_tmp=$(mktemp "${request}.XXXXXX") || die "cannot create request"
+
+	cp "${image}" "${payload_tmp}"
+	chmod 600 "${payload_tmp}"
+	mv -f "${payload_tmp}" "${payload}"
+	{
+		printf 'version=1\n'
+		printf 'size=%s\n' "${UPDATE_SIZE}"
+		printf 'sha256=%s\n' "${digest}"
+	} >"${request_tmp}"
+	chmod 600 "${request_tmp}"
+	mv -f "${request_tmp}" "${request}"
+	trap - EXIT HUP INT TERM
+	sync
+	printf '%s\n' "${metadata}" \
+	    "Staged ${payload}" \
+	    "Staged one-shot request ${request}" \
+	    "Reboot to update SPI; do not remove power during the U-Boot update."
 }
 
 write_request()
@@ -176,6 +248,14 @@ show_watchdog()
 
 self_test()
 {
+	EXPECTED_COMPAT=G98:SPI:16M
+	UPDATE_SIZE=16252928
+	test_image=$(mktemp -t rk3588-uboot-tools) || exit 1
+	trap 'rm -f "${test_image}"' EXIT HUP INT TERM
+	truncate -s "${UPDATE_SIZE}" "${test_image}"
+	printf '%s\0%s\0' "${COMPAT_PREFIX}${EXPECTED_COMPAT}" \
+	    "${VERSION_PREFIX}self-test" | dd of="${test_image}" conv=notrunc status=none
+	verify_firmware "${test_image}" | grep -q '^sha256='
 	valid_target auto
 	valid_target usb0:2
 	valid_target nvme255:128
@@ -321,6 +401,34 @@ watchdog)
 	have_logo_delay=0
 	check_esp
 	write_request
+	;;
+upgrade)
+	case "$#:${1:-}" in
+	1:show)
+		check_esp
+		if [ -f "${ESP}/${SPI_REQUEST_NAME}" ]; then
+			cat "${ESP}/${SPI_REQUEST_NAME}"
+		else
+			echo "No pending SPI firmware update."
+		fi
+		;;
+	1:clear)
+		check_esp
+		rm -f "${ESP}/${SPI_REQUEST_NAME}" "${ESP}/${IMAGE_NAME}"
+		sync
+		echo "Cleared pending SPI firmware update from ${ESP}."
+		;;
+	2:verify)
+		load_firmware_identity
+		verify_firmware "$2"
+		;;
+	1:*)
+		check_esp
+		load_firmware_identity
+		stage_firmware "$1"
+		;;
+	*) usage ;;
+	esac
 	;;
 *) usage ;;
 esac

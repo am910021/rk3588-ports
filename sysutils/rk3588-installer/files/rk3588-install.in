@@ -625,12 +625,12 @@ configure_target()
 	    "${PAYLOAD}/rtlbt-firmware.pkg"
 	[ -f "${BSDINSTALL_CHROOT}/usr/local/share/rtlbt-firmware/rtl8822cu_fw.bin" ] ||
 	    die "rtlbt-firmware package did not install RTL8822CU firmware"
-	[ -f "${PAYLOAD}/uboot-config.pkg" ] ||
-	    die "missing ${PAYLOAD}/uboot-config.pkg"
+	[ -f "${PAYLOAD}/uboot-tools.pkg" ] ||
+	    die "missing ${PAYLOAD}/uboot-tools.pkg"
 	ASSUME_ALWAYS_YES=yes /usr/local/sbin/pkg -r "${BSDINSTALL_CHROOT}" \
-	    -o REPO_AUTOUPDATE=false add "${PAYLOAD}/uboot-config.pkg"
-	[ -x "${BSDINSTALL_CHROOT}/usr/local/sbin/rk3588-uboot-config" ] ||
-	    die "uboot-config.pkg did not install rk3588-uboot-config"
+	    -o REPO_AUTOUPDATE=false add "${PAYLOAD}/uboot-tools.pkg"
+	[ -x "${BSDINSTALL_CHROOT}/usr/local/sbin/rk3588-uboot-tools" ] ||
+	    die "uboot-tools.pkg did not install rk3588-uboot-tools"
 
 	loader_conf=${BSDINSTALL_CHROOT}/boot/loader.conf
 	set_config "${loader_conf}" boot_multicons YES
@@ -681,7 +681,7 @@ configure_target()
 	    ntpd_enable=YES ntpd_sync_on_start=YES powerd_enable=YES
 	boot_target=$(uboot_target "${target_disk}") ||
 	    die "cannot map ${target_disk} to a U-Boot target"
-	"${BSDINSTALL_CHROOT}/usr/local/sbin/rk3588-uboot-config" \
+	"${BSDINSTALL_CHROOT}/usr/local/sbin/rk3588-uboot-tools" \
 	    -e "${BSDINSTALL_CHROOT}/boot/efi" set \
 	    freebsd_default_boot="${boot_target}"
 }

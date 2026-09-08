@@ -1,0 +1,3 @@
+Configures the RK3588 FreeBSD U-Boot menu and watchdog through validated
+one-shot EFI requests.  It also verifies a firmware-update.bin against the
+running U-Boot's board and layout marker before staging a one-shot SPI update.

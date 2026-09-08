@@ -31,7 +31,7 @@ FreeBSD service selection, the installer offers optional HYM8563 RTC and
 RK3588 hardware watchdog checkboxes. `hym8563`, `dwwdt`, and `watchdogd`
 remain disabled on the installed target unless selected.
 
-### `sysutils/rk3588-uboot-config`
+### `sysutils/rk3588-uboot-tools`
 
 Writes a validated `uboot-env.request` to the mounted EFI System Partition.
 The RK3588 U-Boot consumes it once to update the persistent default boot
@@ -40,19 +40,24 @@ watchdog defaults to disabled with a saved 60-second request; the currently
 validated controls are:
 
 ```sh
-rk3588-uboot-config watchdog on 60
-rk3588-uboot-config watchdog off
-rk3588-uboot-config show watchdog
+rk3588-uboot-tools watchdog on 60
+rk3588-uboot-tools watchdog off
+rk3588-uboot-tools show watchdog
 ```
 
 Shorter requests are rejected because they can expire before FreeBSD starts
 `watchdogd`.
 
-### `sysutils/rk3588-uboot-flash`
+For marker-aware SPI firmware, the same tool verifies the image against the
+running board/layout identity and stages the image plus its SHA-256 request:
 
-Development-only tool that stages a SHA-256-verified, one-shot G98 SPI firmware
-update for U-Boot to apply and verify at the next boot. It is deliberately not
-part of `PORT_ORIGINS` and is not included in installer or production images.
+```sh
+rk3588-uboot-tools upgrade verify firmware-update.bin
+rk3588-uboot-tools upgrade firmware-update.bin
+```
+
+U-Boot repeats the checks and verifies the complete SPI read-back before
+resetting. Unsupported boards are rejected before anything is staged.
 
 The NanoPC-T6 LTS image builder consumes these ports from
 `src/ports` and supplies board-specific firmware and DTB payloads to the
@@ -65,8 +70,7 @@ Build a port with the normal FreeBSD Ports framework:
 ```sh
 make -C net/realtek-rge-kmod package
 make -C sysutils/rk3588-installer package
-make -C sysutils/rk3588-uboot-config package
-make -C sysutils/rk3588-uboot-flash package
+make -C sysutils/rk3588-uboot-tools package
 ```
 
 Cross-building `realtek-rge-kmod` requires a matching FreeBSD source and
