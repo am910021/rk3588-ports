@@ -599,38 +599,29 @@ configure_target()
 	    "${BSDINSTALL_CHROOT}/boot/efi/dtb/freebsd.dtb"
 	[ -x /usr/local/sbin/pkg ] ||
 	    die "live image is missing the prebuilt pkg package"
-	[ -f "${PAYLOAD}/pkg.pkg" ] ||
-	    die "missing ${PAYLOAD}/pkg.pkg"
-	ASSUME_ALWAYS_YES=yes /usr/local/sbin/pkg -r "${BSDINSTALL_CHROOT}" \
-	    -o REPO_AUTOUPDATE=false add "${PAYLOAD}/pkg.pkg"
-	[ -x "${BSDINSTALL_CHROOT}/usr/local/sbin/pkg" ] ||
-	    die "pkg.pkg did not install pkg"
-	[ -f "${PAYLOAD}/if_rge.pkg" ] ||
-	    die "missing ${PAYLOAD}/if_rge.pkg"
-	tar --exclude '+*' -xpf "${PAYLOAD}/if_rge.pkg" \
-	    -C "${BSDINSTALL_CHROOT}"
-	[ -f "${BSDINSTALL_CHROOT}/boot/modules/if_rge.ko" ] ||
-	    die "if_rge.pkg did not install if_rge.ko"
-	if [ -f "${PAYLOAD}/yt921x.pkg" ]; then
+
+	# Install every registered package supplied by the board image, offline.
+	set -- "${PAYLOAD}"/*.pkg
+	if [ -e "$1" ] || [ -L "$1" ]; then
+		for payload_pkg in "$@"; do
+			[ -f "${payload_pkg}" ] ||
+			    die "invalid package payload: ${payload_pkg}"
+		done
 		ASSUME_ALWAYS_YES=yes /usr/local/sbin/pkg \
 		    -r "${BSDINSTALL_CHROOT}" -o REPO_AUTOUPDATE=false \
-		    add "${PAYLOAD}/yt921x.pkg"
-		[ -f "${BSDINSTALL_CHROOT}/boot/modules/yt921x.ko" ] ||
-		    die "yt921x.pkg did not install yt921x.ko"
+		    add "$@"
 	fi
-	[ -f "${PAYLOAD}/rtlbt-firmware.pkg" ] ||
-	    die "missing ${PAYLOAD}/rtlbt-firmware.pkg"
-	ASSUME_ALWAYS_YES=yes /usr/local/sbin/pkg -r "${BSDINSTALL_CHROOT}" \
-	    -o REPO_AUTOUPDATE=false add \
-	    "${PAYLOAD}/rtlbt-firmware.pkg"
-	[ -f "${BSDINSTALL_CHROOT}/usr/local/share/rtlbt-firmware/rtl8822cu_fw.bin" ] ||
-	    die "rtlbt-firmware package did not install RTL8822CU firmware"
-	[ -f "${PAYLOAD}/uboot-tools.pkg" ] ||
-	    die "missing ${PAYLOAD}/uboot-tools.pkg"
-	ASSUME_ALWAYS_YES=yes /usr/local/sbin/pkg -r "${BSDINSTALL_CHROOT}" \
-	    -o REPO_AUTOUPDATE=false add "${PAYLOAD}/uboot-tools.pkg"
-	[ -x "${BSDINSTALL_CHROOT}/usr/local/sbin/rk3588-uboot-tools" ] ||
-	    die "uboot-tools.pkg did not install rk3588-uboot-tools"
+
+	# Extract files-only board packages without registering them.
+	set -- "${PAYLOAD}/non-registered"/*.pkg
+	if [ -e "$1" ] || [ -L "$1" ]; then
+		for payload_pkg in "$@"; do
+			[ -f "${payload_pkg}" ] ||
+			    die "invalid non-registered payload: ${payload_pkg}"
+			tar --exclude '+*' -xpf "${payload_pkg}" \
+			    -C "${BSDINSTALL_CHROOT}"
+		done
+	fi
 
 	loader_conf=${BSDINSTALL_CHROOT}/boot/loader.conf
 	set_config "${loader_conf}" boot_multicons YES
@@ -638,8 +629,6 @@ configure_target()
 	set_config "${loader_conf}" console comconsole,efi
 	set_config "${loader_conf}" comconsole_speed 1500000
 	set_config "${loader_conf}" hw.rk3588.efi_fdt_highmem 1
-	set_config "${loader_conf}" if_rge_load YES
-	set_config "${loader_conf}" if_rge_name /boot/modules/if_rge.ko
 	if [ "${enable_rtc}" = YES ]; then
 		[ -f "${BSDINSTALL_CHROOT}/boot/kernel/hym8563.ko" ] ||
 		    die "installed kernel does not provide hym8563.ko"

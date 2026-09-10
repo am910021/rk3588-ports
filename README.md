@@ -31,6 +31,13 @@ FreeBSD service selection, the installer offers optional HYM8563 RTC and
 RK3588 hardware watchdog checkboxes. `hym8563`, `dwwdt`, and `watchdogd`
 remain disabled on the installed target unless selected.
 
+The image builder controls the offline package set. The installer installs
+every `*.pkg` found in its payload root with one offline `pkg add`; an empty
+set is allowed. Packages under the optional `non-registered/` payload
+directory are extracted with package metadata excluded and are not recorded
+in the target package database. This keeps board and driver names out of the
+installer.
+
 ### `sysutils/rk3588-uboot-tools`
 
 Writes a validated `uboot-env.request` to the mounted EFI System Partition.
